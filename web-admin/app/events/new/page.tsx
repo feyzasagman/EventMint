@@ -38,6 +38,10 @@ function inferCategoryAndTags(title: string, description: string) {
   return { inferredCategory, inferredTags: Array.from(tags) };
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : JSON.stringify(error);
+}
+
 export default function NewEventPage() {
   const router = useRouter();
   const [title, setTitle] = useState("");
@@ -62,8 +66,8 @@ export default function NewEventPage() {
       try {
         const role = await getUserRole(user.uid);
         setHasAccess(role === "manager");
-      } catch (e: any) {
-        setError(e?.message ?? JSON.stringify(e));
+      } catch (e: unknown) {
+        setError(getErrorMessage(e));
       } finally {
         setCheckingAccess(false);
       }
@@ -99,9 +103,9 @@ export default function NewEventPage() {
 
       setSuccess(true);
       router.push("/events");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Create event error:", err);
-      setError(err?.message ?? JSON.stringify(err));
+      setError(getErrorMessage(err));
     } finally {
       setSaving(false);
     }
