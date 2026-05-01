@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { getUserRole } from "../../lib/role";
 import { auth, db } from "../../lib/firebase";
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : JSON.stringify(error);
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,7 +18,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const ensureUserDoc = async (uid: string, userEmail?: string | null) => {
+  const ensureUserDoc = useCallback(async (uid: string, userEmail?: string | null) => {
     const role = await getUserRole(uid);
     if (role === null) {
       await setDoc(doc(db, "users", uid), {
@@ -23,7 +27,7 @@ export default function LoginPage() {
         createdAt: serverTimestamp(),
       });
     }
-  };
+  }, [email]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -39,7 +43,7 @@ export default function LoginPage() {
     });
 
     return unsubscribe;
-  }, [router]);
+  }, [ensureUserDoc, router]);
 
   const handleLogin = async () => {
     setLoading(true);
@@ -49,9 +53,9 @@ export default function LoginPage() {
       const credential = await signInWithEmailAndPassword(auth, email, password);
       await ensureUserDoc(credential.user.uid, credential.user.email);
       router.push("/events");
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Login error:", e);
-      setError(e?.message ?? JSON.stringify(e));
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -69,9 +73,9 @@ export default function LoginPage() {
         createdAt: serverTimestamp(),
       });
       router.push("/events");
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Register error:", e);
-      setError(e?.message ?? JSON.stringify(e));
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }

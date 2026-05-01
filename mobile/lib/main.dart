@@ -1,8 +1,10 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'firebase_options.dart';
-import 'screens/events_list.dart';
+import 'screens/events_list_screen.dart';
+import 'screens/login_screen.dart';
 
 Future<void> main() async {
   String? firebaseInitError;
@@ -33,7 +35,39 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: DebugHomeScreen(firebaseInitError: firebaseInitError),
+      home: kIsWeb
+          ? DebugHomeScreen(firebaseInitError: firebaseInitError)
+          : AuthGate(firebaseInitError: firebaseInitError),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key, this.firebaseInitError});
+
+  final String? firebaseInitError;
+
+  @override
+  Widget build(BuildContext context) {
+    if (firebaseInitError != null) {
+      return DebugHomeScreen(firebaseInitError: firebaseInitError);
+    }
+
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snapshot.data == null) {
+          return const LoginScreen();
+        }
+
+        return const EventsListScreen();
+      },
     );
   }
 }
@@ -73,7 +107,7 @@ class DebugHomeScreen extends StatelessWidget {
                     MaterialPageRoute(builder: (_) => const EventsListScreen()),
                   );
                 },
-                child: const Text('Events ekranina git'),
+                child: const Text('Events ekranına git'),
               ),
             ],
           ),

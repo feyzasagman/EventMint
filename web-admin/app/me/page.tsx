@@ -6,6 +6,10 @@ import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "../../lib/firebase";
 import { getUserRole } from "../../lib/role";
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : JSON.stringify(error);
+}
+
 export default function MePage() {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<"student" | "manager" | null>(null);
@@ -34,9 +38,9 @@ export default function MePage() {
 
       try {
         await loadUserData(currentUser.uid);
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("Me page error:", e);
-        setError(e?.message ?? JSON.stringify(e));
+        setError(getErrorMessage(e));
       } finally {
         setLoading(false);
       }
@@ -61,9 +65,9 @@ export default function MePage() {
         { merge: true }
       );
       await loadUserData(user.uid);
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Role update error:", e);
-      setError(e?.message ?? JSON.stringify(e));
+      setError(getErrorMessage(e));
     } finally {
       setUpdating(false);
     }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
@@ -11,6 +12,8 @@ import {
   orderBy,
   query,
   QuerySnapshot,
+  serverTimestamp,
+  Timestamp,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { getUserRole } from "../../lib/role";
@@ -54,6 +57,19 @@ function pickTags(data: Record<string, unknown>) {
   return [];
 }
 
+function createNonce(length = 10) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+}
+
+function createSessionExpiresAt() {
+  return Timestamp.fromDate(new Date(Date.now() + 2 * 60 * 1000));
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : JSON.stringify(error);
+}
+
 export default function EventsPage() {
   const router = useRouter();
   const [events, setEvents] = useState<EventItem[]>([]);
@@ -61,6 +77,7 @@ export default function EventsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [startingQrId, setStartingQrId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -111,7 +128,7 @@ export default function EventsPage() {
             handleSnapshot,
             (fallbackError) => {
               console.error("Firestore error:", fallbackError);
-              setErr((fallbackError as any)?.message ?? JSON.stringify(fallbackError));
+              setErr(getErrorMessage(fallbackError));
               setLoading(false);
             }
           );
@@ -128,9 +145,9 @@ export default function EventsPage() {
             subscribeWithoutOrder();
           }
         );
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("Firestore error:", e);
-        setErr(e?.message ?? JSON.stringify(e));
+        setErr(getErrorMessage(e));
         setLoading(false);
       }
     });
@@ -153,11 +170,34 @@ export default function EventsPage() {
     try {
       await deleteDoc(doc(db, "events", id));
       setNotice("Etkinlik silindi.");
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Delete event error:", e);
-      setNotice(`Silme basarisiz: ${e?.message ?? JSON.stringify(e)}`);
+      setNotice(`Silme basarisiz: ${getErrorMessage(e)}`);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleStartQr = async (eventId: string) => {
+    setStartingQrId(eventId);
+    setNotice(null);
+
+    try {
+      const expiresAt = createSessionExpiresAt();
+      const sessionRef = await addDoc(collection(db, "sessions"), {
+        eventId,
+        active: true,
+        createdAt: serverTimestamp(),
+        expiresAt,
+        nonce: createNonce(),
+      });
+
+      router.push(`/events/${eventId}/qr?sessionId=${sessionRef.id}`);
+    } catch (e: unknown) {
+      console.error("Create session error:", e);
+      setNotice(`QR oturumu baslatilamadi: ${getErrorMessage(e)}`);
+    } finally {
+      setStartingQrId(null);
     }
   };
 
@@ -210,14 +250,24 @@ export default function EventsPage() {
                   Tags: {event.tags.join(", ")}
                 </p>
               )}
-              <button
-                type="button"
-                onClick={() => handleDelete(event.id)}
-                disabled={deletingId === event.id}
-                className="mt-4 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {deletingId === event.id ? "Siliniyor..." : "Sil"}
-              </button>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleStartQr(event.id)}
+                  disabled={startingQrId === event.id}
+                  className="rounded-md bg-black px-3 py-1 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black"
+                >
+                  {startingQrId === event.id ? "Baslatiliyor..." : "QR Başlat"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(event.id)}
+                  disabled={deletingId === event.id}
+                  className="rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {deletingId === event.id ? "Siliniyor..." : "Sil"}
+                </button>
+              </div>
             </li>
           ))}
         </ul>
