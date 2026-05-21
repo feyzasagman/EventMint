@@ -60,6 +60,40 @@ class ProfileScreen extends StatelessWidget {
               else
                 ...badges.map((badge) => _BadgeCard(badge: badge)),
               const SizedBox(height: 24),
+              const Text(
+                "Katılım Geçmişi",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection("Check-in")
+                    .where("UID", isEqualTo: FirebaseAuth.instance.currentUser!.uid)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return Text("Hata: ${snapshot.error}");
+                  }
+                  if (!snapshot.hasData) {
+                    return const Text("Yükleniyor...");
+                  }
+                  final docs = snapshot.data!.docs;
+                  if (docs.isEmpty) {
+                    return const Text("Henüz check-in yok.");
+                  }
+                  return Column(
+                    children: docs.map((d) {
+                      final data = d.data() as Map<String, dynamic>;
+                      final eventId = (data["eventId"] ?? "").toString();
+                      return _CheckinCard(
+                        eventId: eventId,
+                        checkinAt: data["checkinAt"],
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
               FilledButton.icon(
                 onPressed: () async {
                   await FirebaseAuth.instance.signOut();
@@ -126,6 +160,25 @@ String _formatEarnedAt(Object? value) {
   return '-';
 }
 
+String _formatCheckinAt(Object? value) {
+  if (value is Timestamp) {
+    return value.toDate().toString();
+  }
+  return value?.toString() ?? "";
+}
+
+String _pickEventTitle(Map<String, dynamic>? data, String eventId) {
+  if (data == null) return eventId;
+
+  final title = _asString(data['title']);
+  if (title.isNotEmpty) return title;
+
+  final turkishTitle = _asString(data['Başlık'] ?? data['Baslik']);
+  if (turkishTitle.isNotEmpty) return turkishTitle;
+
+  return eventId;
+}
+
 class _InfoTile extends StatelessWidget {
   const _InfoTile({required this.label, required this.value});
 
@@ -138,6 +191,53 @@ class _InfoTile extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       title: Text(label),
       subtitle: Text(value),
+    );
+  }
+}
+
+class _CheckinCard extends StatelessWidget {
+  const _CheckinCard({required this.eventId, required this.checkinAt});
+
+  final String eventId;
+  final Object? checkinAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallbackTitle = eventId.isEmpty ? '-' : eventId;
+    final timeText = _formatCheckinAt(checkinAt);
+
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: eventId.isEmpty
+          ? null
+          : FirebaseFirestore.instance.collection('Etkinlikler').doc(eventId).get(),
+      builder: (context, snapshot) {
+        final eventData = snapshot.data?.data();
+        final eventTitle = _pickEventTitle(eventData, fallbackTitle);
+
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0x22000000)),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                eventTitle,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                timeText,
+                style: const TextStyle(color: Color(0x99000000)),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

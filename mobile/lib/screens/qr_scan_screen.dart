@@ -132,12 +132,12 @@ class _QRScanScreenState extends State<QRScanScreen> {
         _isSuccess = false;
         _isProcessing = false;
       });
-    } catch (error) {
-      debugPrint('BADGE ERROR: $error');
+    } catch (e) {
+      debugPrint("CHECKIN ERROR: $e");
       if (!mounted) return;
 
       setState(() {
-        _message = 'Check-in başarısız: $error';
+        _message = 'Check-in başarısız: $e';
         _isSuccess = false;
         _isProcessing = false;
       });
@@ -163,15 +163,17 @@ class _QRScanScreenState extends State<QRScanScreen> {
     final userRef = firestore.collection('Kullanıcılar').doc(uid);
 
     try {
+      final badgeEarnedAt = Timestamp.now();
       debugPrint('BADGE: about to write FIRST_ATTEND via userRef.set');
       debugPrint('USERREF PATH => ${userRef.path}');
-      debugPrint('USERREF UID => $uid');
+      debugPrint('UID => $uid');
       await userRef.set({
         'pointsTotal': FieldValue.increment(10),
         'Rozetler': FieldValue.arrayUnion([
-          {'id': 'FIRST_ATTEND', 'earnedAt': FieldValue.serverTimestamp()},
+          {'id': 'FIRST_ATTEND', 'earnedAt': badgeEarnedAt},
         ]),
         'lastBadgeWrite': FieldValue.serverTimestamp(),
+        'debugWrite': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       debugPrint('BADGE: wrote Rozetler + lastBadgeWrite');
       debugPrint('BADGE: userRef.set completed');
