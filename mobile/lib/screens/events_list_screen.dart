@@ -1,9 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'event_detail_screen.dart';
 import 'profile_screen.dart';
+import '../widgets/empty_state.dart';
+import '../widgets/event_card.dart';
+
+const String _primaryEventsCollectionName = 'Etkinlikler';
+const String _fallbackEventsCollectionName = 'events';
 
 String pickString(Map data, List<String> keys) {
   for (final key in keys) {
@@ -35,24 +41,135 @@ List<String> pickStringList(Map data, List<String> keys) {
   return [];
 }
 
+Future<_RsvpLookupResult> _findRsvp(String eventId, String uid) async {
+  final rsvpCollection =
+      FirebaseFirestore.instance.collection("RSVP'ler");
+  final docRef = rsvpCollection.doc('${eventId}_$uid');
+  final docSnapshot = await docRef.get();
+  if (docSnapshot.exists) {
+    return _RsvpLookupResult(ref: docRef, exists: true);
+  }
+
+  final uidSnapshot = await rsvpCollection
+      .where('eventId', isEqualTo: eventId)
+      .where('UID', isEqualTo: uid)
+      .limit(1)
+      .get();
+  if (uidSnapshot.docs.isNotEmpty) {
+    return _RsvpLookupResult(
+      ref: uidSnapshot.docs.first.reference,
+      exists: true,
+    );
+  }
+
+  final lowercaseUidSnapshot = await rsvpCollection
+      .where('eventId', isEqualTo: eventId)
+      .where('uid', isEqualTo: uid)
+      .limit(1)
+      .get();
+  if (lowercaseUidSnapshot.docs.isNotEmpty) {
+    return _RsvpLookupResult(
+      ref: lowercaseUidSnapshot.docs.first.reference,
+      exists: true,
+    );
+  }
+
+  return _RsvpLookupResult(ref: docRef, exists: false);
+}
+
+class _RsvpLookupResult {
+  const _RsvpLookupResult({required this.ref, required this.exists});
+
+  final DocumentReference<Map<String, dynamic>> ref;
+  final bool exists;
+}
+
 class EventsListScreen extends StatefulWidget {
-  const EventsListScreen({super.key});
+  const EventsListScreen({super.key, this.showScaffold = true});
+
+  final bool showScaffold;
 
   @override
   State<EventsListScreen> createState() => _EventsListScreenState();
 }
 
 class _EventsListScreenState extends State<EventsListScreen> {
-  bool _orderByFailed = false;
+  late final Future<String> _eventsCollectionFuture = _pickEventsCollection();
+  final TextEditingController _searchController = TextEditingController();
+  bool _isSearching = false;
+  String _searchQuery = '';
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> get _eventsStream {
-    if (_orderByFailed) {
-      return FirebaseFirestore.instance.collection('events').snapshots();
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<String> _pickEventsCollection() async {
+    final primarySnapshot = await FirebaseFirestore.instance
+        .collection(_primaryEventsCollectionName)
+        .get();
+    if (primarySnapshot.docs.isNotEmpty) {
+      return _primaryEventsCollectionName;
     }
-    return FirebaseFirestore.instance
-        .collection('events')
-        .orderBy('createdAt', descending: true)
-        .snapshots();
+    return _fallbackEventsCollectionName;
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _eventsStream(
+    String collectionName,
+  ) {
+    return FirebaseFirestore.instance.collection(collectionName).snapshots();
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _filterDocs(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) return docs;
+
+    return docs.where((doc) {
+      final data = doc.data();
+      final title = pickString(data, const [
+        'title',
+        'Baslik',
+        'Başlık',
+        'başlık',
+        'baslik',
+      ]);
+      final clubId = pickString(data, const ['clubId', 'Kulup', 'kulup']);
+      final category = pickString(data, const [
+        'category',
+        'Kategori',
+        'kategori',
+      ]);
+      final location = pickString(data, const ['location', 'Konum', 'konum']);
+      final tags = pickStringList(data, const [
+        'tags',
+        'Etiketler',
+        'etiketler',
+      ]);
+      final searchable = [
+        title,
+        clubId,
+        category,
+        location,
+        ...tags,
+      ].join(' ').toLowerCase();
+
+      return searchable.contains(query);
+    }).toList();
+  }
+
+  void _openSearch() {
+    setState(() => _isSearching = true);
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {
+      _searchQuery = '';
+      _isSearching = false;
+    });
   }
 
   @override
@@ -69,10 +186,165 @@ class _EventsListScreenState extends State<EventsListScreen> {
       );
     }
 
+    final body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: FutureBuilder<String>(
+              future: _eventsCollectionFuture,
+              builder: (context, collectionSnapshot) {
+                if (collectionSnapshot.hasError) {
+                  debugPrint("EVENTS ERROR: ${collectionSnapshot.error}");
+                  return Center(
+                    child: Text("Hata: ${collectionSnapshot.error}"),
+                  );
+                }
+
+                if (!collectionSnapshot.hasData) {
+                  return const Center(child: Text("Yükleniyor..."));
+                }
+
+                final collectionName = collectionSnapshot.data!;
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: _eventsStream(collectionName),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      debugPrint("EVENTS ERROR: ${snapshot.error}");
+                      return Center(child: Text("Hata: ${snapshot.error}"));
+                    }
+
+                    if (!snapshot.hasData) {
+                      return const Center(child: Text("Yükleniyor..."));
+                    }
+
+                    final docs = snapshot.data!.docs;
+                    final filteredDocs = _filterDocs(docs);
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (docs.isEmpty)
+                          const Expanded(
+                            child: EmptyState(
+                              icon: Icons.event_busy,
+                              title: 'Etkinlik bulunamadı',
+                              subtitle: 'Yeni etkinlikler eklendiğinde burada görünecek.',
+                            ),
+                          )
+                        else if (filteredDocs.isEmpty)
+                          const Expanded(
+                            child: EmptyState(
+                              icon: Icons.search_off,
+                              title: 'Sonuç bulunamadı',
+                              subtitle: 'Aramanı değiştir',
+                            ),
+                          )
+                        else
+                          Expanded(
+                            child: ListView.separated(
+                              itemCount: filteredDocs.length,
+                              separatorBuilder: (context, index) =>
+                                  const SizedBox(height: 8),
+                              padding: const EdgeInsets.all(12),
+                              itemBuilder: (context, index) {
+                            final data = filteredDocs[index].data();
+                            final eventId = filteredDocs[index].id;
+
+                            final titleRaw = pickString(data, const [
+                              'title',
+                              'Baslik',
+                              'Başlık',
+                              'başlık',
+                              'baslik',
+                            ]);
+                            final title =
+                                titleRaw.isEmpty ? '(Başlık yok)' : titleRaw;
+                            final clubIdRaw = pickString(data, const [
+                              'clubId',
+                              'Kulup',
+                              'kulup',
+                            ]);
+                            final clubId = clubIdRaw.isEmpty ? '-' : clubIdRaw;
+                            final categoryRaw = pickString(data, const [
+                              'category',
+                              'Kategori',
+                              'kategori',
+                            ]);
+                            final category =
+                                categoryRaw.isEmpty ? '-' : categoryRaw;
+                            final locationRaw = pickString(data, const [
+                              'location',
+                              'Konum',
+                              'konum',
+                            ]);
+                            final location =
+                                locationRaw.isEmpty ? '-' : locationRaw;
+                            final tags = pickStringList(data, const [
+                              'tags',
+                              'Etiketler',
+                              'etiketler',
+                            ]);
+
+                            return EventCard(
+                              title: title,
+                              clubId: clubId,
+                              category: category,
+                              location: location,
+                              tags: tags,
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => EventDetailScreen(
+                                      eventId: eventId,
+                                      data: data,
+                                    ),
+                                  ),
+                                );
+                              },
+                              trailingActions: Align(
+                                alignment: Alignment.centerLeft,
+                                child: _RsvpStatusActions(eventId: eventId),
+                              ),
+                            );
+                              },
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+    );
+    if (!widget.showScaffold) return body;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Etkinlikler'),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Etkinlik ara...',
+                  border: InputBorder.none,
+                ),
+                textInputAction: TextInputAction.search,
+                onChanged: (value) => setState(() => _searchQuery = value),
+              )
+            : const Text('Etkinlikler'),
         actions: [
+          if (_isSearching)
+            IconButton(
+              tooltip: 'Aramayı kapat',
+              onPressed: _clearSearch,
+              icon: const Icon(Icons.close),
+            )
+          else
+            IconButton(
+              tooltip: 'Ara',
+              onPressed: _openSearch,
+              icon: const Icon(Icons.search),
+            ),
           IconButton(
             tooltip: 'Profil',
             onPressed: () {
@@ -84,160 +356,150 @@ class _EventsListScreenState extends State<EventsListScreen> {
           ),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        key: ValueKey<bool>(_orderByFailed),
-        stream: _eventsStream,
-        builder: (context, snapshot) {
-          if (snapshot.hasError && !_orderByFailed) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                setState(() => _orderByFailed = true);
-              }
-            });
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (snapshot.hasError) {
-            return Center(child: Text('Veri alınamadı: ${snapshot.error}'));
-          }
-
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          final docs = snapshot.data?.docs ?? [];
-          if (docs.isEmpty) {
-            return const Center(child: Text('events koleksiyonunda veri yok.'));
-          }
-
-          return ListView.separated(
-            itemCount: docs.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 8),
-            padding: const EdgeInsets.all(12),
-            itemBuilder: (context, index) {
-              final data = docs[index].data();
-
-              final titleRaw = pickString(data, const [
-                'title',
-                'Baslik',
-                'başlık',
-                'baslik',
-              ]);
-              final title = titleRaw.isEmpty ? '(Başlık yok)' : titleRaw;
-              final clubIdRaw = pickString(data, const [
-                'clubId',
-                'Kulup',
-                'kulup',
-              ]);
-              final clubId = clubIdRaw.isEmpty ? '-' : clubIdRaw;
-              final categoryRaw = pickString(data, const [
-                'category',
-                'Kategori',
-                'kategori',
-              ]);
-              final category = categoryRaw.isEmpty ? '-' : categoryRaw;
-              final locationRaw = pickString(data, const [
-                'location',
-                'Konum',
-                'konum',
-              ]);
-              final location = locationRaw.isEmpty ? '-' : locationRaw;
-              final tags = pickStringList(data, const [
-                'tags',
-                'Etiketler',
-                'etiketler',
-              ]);
-
-              return Card(
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => EventDetailScreen(
-                          eventId: docs[index].id,
-                          data: data,
-                        ),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        _InfoRow(label: 'Kulüp', value: clubId),
-                        _InfoRow(label: 'Kategori', value: category),
-                        _InfoRow(label: 'Konum', value: location),
-                        if (tags.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            'Etiketler',
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
-                          const SizedBox(height: 4),
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 4,
-                            children: tags
-                                .map(
-                                  (t) => Chip(
-                                    label: Text(t),
-                                    visualDensity: VisualDensity.compact,
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    padding: EdgeInsets.zero,
-                                    labelPadding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
+      body: body,
     );
   }
 }
 
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
+class _RsvpStatusActions extends StatefulWidget {
+  const _RsvpStatusActions({required this.eventId});
 
-  final String label;
-  final String value;
+  final String eventId;
+
+  @override
+  State<_RsvpStatusActions> createState() => _RsvpStatusActionsState();
+}
+
+class _RsvpStatusActionsState extends State<_RsvpStatusActions> {
+  late Future<_RsvpLookupResult> _rsvpFuture;
+  bool _isSaving = false;
+
+  String get _uid => FirebaseAuth.instance.currentUser!.uid;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshRsvp();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RsvpStatusActions oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.eventId != widget.eventId) {
+      _refreshRsvp();
+    }
+  }
+
+  void _refreshRsvp() {
+    _rsvpFuture = _findRsvp(widget.eventId, _uid);
+  }
+
+  Future<void> _saveRsvp() async {
+    setState(() => _isSaving = true);
+    try {
+      final result = await _rsvpFuture;
+      await result.ref.set({
+        'eventId': widget.eventId,
+        'UID': _uid,
+        'uid': _uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _refreshRsvp();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('RSVP kaydedilemedi: $error')));
+    }
+  }
+
+  Future<void> _deleteRsvp() async {
+    setState(() => _isSaving = true);
+    try {
+      final result = await _rsvpFuture;
+      await result.ref.delete();
+
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _refreshRsvp();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('RSVP iptal edilemedi: $error')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 72,
-            child: Text(
-              '$label:',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+    return FutureBuilder<_RsvpLookupResult>(
+      future: _rsvpFuture,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          debugPrint("EVENTS ERROR: ${snapshot.error}");
+          return Text("Hata: ${snapshot.error}");
+        }
+
+        if (!snapshot.hasData) {
+          return const SizedBox(
+            height: 36,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
+          );
+        }
+
+        final isRsvped = snapshot.data!.exists;
+
+        if (isRsvped) {
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Chip(
+                label: const Text('RSVP ✅'),
+                backgroundColor: Colors.green.shade50,
+                labelStyle: TextStyle(color: Colors.green.shade800),
+                labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              const SizedBox(width: 4),
+              TextButton(
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 30),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: _isSaving ? null : _deleteRsvp,
+                child: const Text('İptal'),
+              ),
+            ],
+          );
+        }
+
+        return FilledButton(
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(0, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          Expanded(child: Text(value)),
-        ],
-      ),
+          onPressed: _isSaving ? null : _saveRsvp,
+          child: const Text('Katılacağım'),
+        );
+      },
     );
   }
 }

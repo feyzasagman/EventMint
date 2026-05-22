@@ -164,17 +164,35 @@ class _QRScanScreenState extends State<QRScanScreen> {
 
     try {
       final badgeEarnedAt = Timestamp.now();
+      final userDoc = await userRef.get();
+      final userData = userDoc.data() ?? <String, dynamic>{};
+      final existingBadges = userData['Rozetler'];
+      final existingBadgeIds = <String>{};
+      if (existingBadges is List) {
+        for (final badge in existingBadges) {
+          if (badge is Map) {
+            final id = badge['id']?.toString().trim();
+            if (id != null && id.isNotEmpty) {
+              existingBadgeIds.add(id);
+            }
+          }
+        }
+      }
+      final shouldAddFirstAttend = !existingBadgeIds.contains('FIRST_ATTEND');
+      final updateData = <String, dynamic>{
+        'pointsTotal': FieldValue.increment(10),
+        'lastBadgeWrite': FieldValue.serverTimestamp(),
+        'debugWrite': FieldValue.serverTimestamp(),
+      };
+      if (shouldAddFirstAttend) {
+        updateData['Rozetler'] = FieldValue.arrayUnion([
+          {'id': 'FIRST_ATTEND', 'earnedAt': badgeEarnedAt},
+        ]);
+      }
       debugPrint('BADGE: about to write FIRST_ATTEND via userRef.set');
       debugPrint('USERREF PATH => ${userRef.path}');
       debugPrint('UID => $uid');
-      await userRef.set({
-        'pointsTotal': FieldValue.increment(10),
-        'Rozetler': FieldValue.arrayUnion([
-          {'id': 'FIRST_ATTEND', 'earnedAt': badgeEarnedAt},
-        ]),
-        'lastBadgeWrite': FieldValue.serverTimestamp(),
-        'debugWrite': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await userRef.set(updateData, SetOptions(merge: true));
       debugPrint('BADGE: wrote Rozetler + lastBadgeWrite');
       debugPrint('BADGE: userRef.set completed');
       return true;
