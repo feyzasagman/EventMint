@@ -44,6 +44,7 @@ export default function EventQrPage() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [closing, setClosing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -115,6 +116,13 @@ export default function EventQrPage() {
     }
   };
 
+  const copyQrText = async () => {
+    if (!qrText) return;
+    await navigator.clipboard.writeText(qrText);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+
   const expiresAtMs = session?.expiresAt?.toDate().getTime();
   const expiresAtText = session?.expiresAt?.toDate().toLocaleString("tr-TR") ?? "-";
   const remainingMs = expiresAtMs ? expiresAtMs - now : 0;
@@ -141,19 +149,39 @@ export default function EventQrPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-10">
+    <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
       <button
         type="button"
         onClick={() => router.push("/events")}
-        className="mb-6 rounded-md border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        className="mb-6 rounded-xl border border-zinc-300 px-3 py-2 text-sm transition hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
       >
         ← Events listesine dön
       </button>
 
-      <h1 className="mb-6 text-3xl font-semibold">Check-in QR</h1>
+      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-medium uppercase tracking-wide text-indigo-600 dark:text-indigo-400">
+            Check-in oturumu
+          </p>
+          <h1 className="mt-1 text-4xl font-semibold tracking-tight">Check-in QR</h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            Katılımcılar mobil uygulamada bu QR kodu okutarak check-in yapar.
+          </p>
+        </div>
+        {session && (
+          <button
+            type="button"
+            onClick={closeSession}
+            disabled={closing || isInactive}
+            className="rounded-2xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {closing ? "Kapatılıyor..." : isInactive ? "Oturum kapalı" : "Oturumu kapat"}
+          </button>
+        )}
+      </div>
 
       {!sessionId && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">
+        <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
           sessionId eksik.
         </p>
       )}
@@ -161,30 +189,52 @@ export default function EventQrPage() {
       {loadingSession && <p>Session yukleniyor...</p>}
 
       {error && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">
+        <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
           {error}
         </p>
       )}
 
       {eventMismatch && (
-        <p className="rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-yellow-800">
+        <p className="rounded-2xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-yellow-800">
           Bu session farklı bir etkinliğe ait görünüyor.
         </p>
       )}
 
       {isInactive && (
-        <p className="mb-4 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-yellow-800">
+        <p className="mb-4 rounded-2xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-yellow-800">
           Oturum kapalı.
         </p>
       )}
 
+      {session && isExpired && !isInactive && (
+        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+          <p className="font-semibold">Süre doldu</p>
+          <p className="mt-1 text-sm">Bu QR oturumunun geçerlilik süresi bitti. Yeni bir oturum başlatabilirsin.</p>
+        </div>
+      )}
+
       {session && qrText && (
-        <section className="space-y-6 rounded-lg border p-6 shadow-sm">
-          <div className="flex justify-center rounded-lg bg-white p-6">
-            <QRCodeSVG value={qrText} size={260} level="M" includeMargin />
+        <section className="grid gap-6 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 lg:grid-cols-[1fr_1.1fr]">
+          <div className="flex flex-col items-center justify-center rounded-3xl bg-zinc-50 p-6 dark:bg-zinc-900">
+            <div className="rounded-3xl bg-white p-5 shadow-sm">
+              <QRCodeSVG value={qrText} size={280} level="M" includeMargin />
+            </div>
+            <button
+              type="button"
+              onClick={copyQrText}
+              className="mt-5 rounded-2xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
+            >
+              {copied ? "Kopyalandı" : "Kodu kopyala"}
+            </button>
           </div>
 
-          <div className="space-y-2 text-sm">
+          <div className="space-y-4 text-sm">
+            <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
+              <p className="text-zinc-500 dark:text-zinc-400">Kalan süre</p>
+              <p className={isExpired ? "mt-1 text-lg font-semibold text-red-600" : "mt-1 text-lg font-semibold text-green-700"}>
+                {isExpired ? "Süre doldu" : formatRemaining(remainingMs)}
+              </p>
+            </div>
             <p>
               <span className="font-medium">Kalan süre:</span>{" "}
               <span className={isExpired ? "text-red-600" : "text-green-700"}>
@@ -200,19 +250,10 @@ export default function EventQrPage() {
             <p>
               <span className="font-medium">ExpiresAt:</span> {expiresAtText}
             </p>
-            <p className="break-all rounded-md bg-zinc-100 p-3 font-mono text-xs dark:bg-zinc-900">
+            <p className="break-all rounded-2xl bg-zinc-100 p-4 font-mono text-xs dark:bg-zinc-900">
               {qrText}
             </p>
           </div>
-
-          <button
-            type="button"
-            onClick={closeSession}
-            disabled={closing || isInactive}
-            className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {closing ? "Kapatılıyor..." : isInactive ? "Oturum kapalı" : "Oturumu kapat"}
-          </button>
         </section>
       )}
     </main>

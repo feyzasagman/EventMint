@@ -1,9 +1,9 @@
-import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'firebase_options.dart';
-import 'screens/events_list_screen.dart';
+import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 
 Future<void> main() async {
@@ -33,7 +33,8 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'EventMint',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorSchemeSeed: Colors.indigo,
+        useMaterial3: true,
       ),
       home: kIsWeb
           ? DebugHomeScreen(firebaseInitError: firebaseInitError)
@@ -66,7 +67,7 @@ class AuthGate extends StatelessWidget {
           return const LoginScreen();
         }
 
-        return const EventsListScreen();
+        return const HomeShell();
       },
     );
   }
@@ -104,7 +105,9 @@ class DebugHomeScreen extends StatelessWidget {
               ElevatedButton(
                 onPressed: () {
                   Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const EventsListScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const HomeShell(),
+                    ),
                   );
                 },
                 child: const Text('Events ekranına git'),
