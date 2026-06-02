@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../services/user_record_service.dart';
+import 'banned_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -29,6 +31,7 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text,
       );
       await _ensureUserDocument(credential.user);
+      await _handleBannedAfterAuth(credential.user);
     });
   }
 
@@ -45,7 +48,14 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } on FirebaseAuthException catch (e) {
         if (e.code != 'email-already-in-use') {
-          rethrow;
+          final message = _authErrorMessage(e);
+          // ignore: avoid_print
+          print('AUTH ERROR: ${e.code} ${e.message}');
+          if (mounted) {
+            setState(() => _errorText = message);
+          }
+          _showSnackBar(message);
+          return;
         }
 
         // ignore: avoid_print
@@ -63,6 +73,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       await _ensureUserDocument(credential.user);
+      await _handleBannedAfterAuth(credential.user);
     });
   }
 
@@ -122,8 +133,23 @@ class _LoginScreenState extends State<LoginScreen> {
     await ref.set({
       'email': user.email ?? _emailController.text.trim(),
       'role': 'student',
+      'banned': false,
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> _handleBannedAfterAuth(User? user) async {
+    if (user == null) return;
+    final record = await getUserRecord(user.uid);
+    final banned = record != null && isBanned(record);
+    if (!banned) return;
+
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const BannedScreen()),
+      (route) => false,
+    );
   }
 
   void _showSnackBar(String message) {

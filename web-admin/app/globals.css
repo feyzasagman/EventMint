@@ -1,26 +1,116 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --brand: #6d5ef7;
+  --bg: #0b0f1a;
+  --surface: #121a2a;
+  --surface2: #0f1626;
+  --border: #202a3c;
+  --text: #eaf0ff;
+  --text2: #a9b4cc;
+  --danger: #ff5c7a;
+  --radius-16: 16px;
+  --radius-14: 14px;
+  --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-brand: var(--brand);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface2: var(--surface2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text2: var(--text2);
+  --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.ui-card {
+  border-radius: var(--radius-16);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+}
+
+.ui-chip {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text2);
+}
+
+.ui-chip-brand {
+  background: color-mix(in oklab, var(--brand) 28%, var(--surface2));
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--brand) 44%, var(--border));
+}
+
+.ui-button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: var(--radius-14);
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  transition: all 160ms ease;
+}
+
+.ui-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ui-button-brand {
+  background: var(--brand);
+  color: var(--text);
+}
+
+.ui-button-brand:hover {
+  filter: brightness(1.05);
+}
+
+.ui-button-secondary {
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.ui-input {
+  min-height: 44px;
+  width: 100%;
+  border-radius: var(--radius-14);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  padding: 0 14px;
+  font-size: 14px;
+  outline: none;
+}
+
+.ui-input::placeholder {
+  color: var(--text2);
+}
+
+.ui-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--brand) 22%, transparent);
 }

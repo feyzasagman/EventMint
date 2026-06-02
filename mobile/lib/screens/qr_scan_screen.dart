@@ -25,6 +25,15 @@ class _QRScanScreenState extends State<QRScanScreen> {
     super.dispose();
   }
 
+  void _showScanError(String message) {
+    if (!mounted) return;
+    setState(() {
+      _message = message;
+      _isSuccess = false;
+      _isProcessing = false;
+    });
+  }
+
   Future<void> _handleCode(String rawValue) async {
     if (_isProcessing) return;
 
@@ -38,7 +47,8 @@ class _QRScanScreenState extends State<QRScanScreen> {
     try {
       final parts = rawValue.split('|');
       if (parts.length != 2 || parts.any((part) => part.trim().isEmpty)) {
-        throw const _ScanException('Kod formatı hatalı');
+        _showScanError('Kod formatı hatalı');
+        return;
       }
 
       final sessionId = parts[0].trim();
@@ -49,43 +59,56 @@ class _QRScanScreenState extends State<QRScanScreen> {
           .get();
 
       if (!sessionDoc.exists) {
-        throw const _ScanException('Geçersiz QR');
+        _showScanError('Geçersiz QR');
+        return;
       }
 
       final sessionData = sessionDoc.data();
       if (sessionData == null) {
-        throw const _ScanException('Geçersiz QR');
+        _showScanError('Geçersiz QR');
+        return;
       }
 
       if (sessionData['active'] != true) {
-        throw const _ScanException('Oturum kapalı');
+        _showScanError('Oturum kapalı');
+        return;
       }
 
       final expiresAt = sessionData['expiresAt'];
       if (expiresAt is! Timestamp) {
-        throw const _ScanException('Geçersiz QR');
+        _showScanError('Geçersiz QR');
+        return;
       }
 
       if (!expiresAt.toDate().isAfter(DateTime.now())) {
-        throw const _ScanException('Süre doldu');
+        _showScanError('Süre doldu');
+        return;
       }
 
       if (sessionData['nonce'] != nonce) {
-        throw const _ScanException('Geçersiz QR');
+        _showScanError('Geçersiz QR');
+        return;
       }
 
       final eventId = sessionData['eventId'];
       if (eventId is! String || eventId.trim().isEmpty) {
-        throw const _ScanException('Geçersiz QR');
+        _showScanError('Geçersiz QR');
+        return;
       }
 
-      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        _showScanError('Oturum bulunamadı');
+        return;
+      }
+      final uid = user.uid;
       final checkinRef = FirebaseFirestore.instance
           .collection('Check-in')
           .doc('${eventId}_$uid');
       final existingCheckin = await checkinRef.get();
       if (existingCheckin.exists) {
-        throw const _ScanException('Zaten check-in yaptın');
+        _showScanError('Zaten check-in yaptın');
+        return;
       }
 
       await checkinRef.set({
@@ -124,16 +147,19 @@ class _QRScanScreenState extends State<QRScanScreen> {
       if (mounted) {
         Navigator.of(context).pop(reward);
       }
-    } on _ScanException catch (error) {
+    } on FirebaseException catch (e, st) {
+      debugPrint("FIRESTORE ERROR: $e");
+      debugPrint("$st");
       if (!mounted) return;
 
       setState(() {
-        _message = error.message;
+        _message = 'Check-in başarısız: ${e.message ?? e.code}';
         _isSuccess = false;
         _isProcessing = false;
       });
-    } catch (e) {
+    } catch (e, st) {
       debugPrint("CHECKIN ERROR: $e");
+      debugPrint("$st");
       if (!mounted) return;
 
       setState(() {
@@ -196,8 +222,14 @@ class _QRScanScreenState extends State<QRScanScreen> {
       debugPrint('BADGE: wrote Rozetler + lastBadgeWrite');
       debugPrint('BADGE: userRef.set completed');
       return true;
-    } catch (error) {
+    } on FirebaseException catch (error, st) {
+      debugPrint('FIRESTORE ERROR: $error');
+      debugPrint('$st');
+      debugPrint('Puan güncellenemedi: ${error.message ?? error.code}');
+      return false;
+    } catch (error, st) {
       debugPrint('BADGE ERROR: $error');
+      debugPrint('$st');
       debugPrint('Puan güncellenemedi: $error');
       return false;
     }
@@ -299,12 +331,6 @@ class _QRScanScreenState extends State<QRScanScreen> {
       ),
     );
   }
-}
-
-class _ScanException implements Exception {
-  const _ScanException(this.message);
-
-  final String message;
 }
 
 class CheckinRewardResult {

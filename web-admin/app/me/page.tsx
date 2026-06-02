@@ -1,117 +1,118 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, User } from "firebase/auth";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { signOut } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../../lib/firebase";
-import { getUserRole } from "../../lib/role";
+import { useAuth } from "../providers/AuthProvider";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : JSON.stringify(error);
 }
 
 export default function MePage() {
-  const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<"student" | "manager" | null>(null);
+  const { user, loading } = useAuth();
+  const [resolvedUid, setResolvedUid] = useState<string | null>(null);
   const [userDoc, setUserDoc] = useState<Record<string, unknown> | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [updating, setUpdating] = useState(false);
-
-  const loadUserData = async (uid: string) => {
-    const snapshot = await getDoc(doc(db, "users", uid));
-    setUserDoc(snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : null);
-    setRole(await getUserRole(uid));
-  };
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      setError(null);
+    if (loading || !user) return;
 
-      if (!currentUser) {
-        setRole(null);
+    let isCancelled = false;
+    getDoc(doc(db, "users", user.uid))
+      .then((snapshot) => {
+        if (isCancelled) return;
+        setResolvedUid(user.uid);
+        setError(null);
+        setUserDoc(snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : null);
+      })
+      .catch((e: unknown) => {
+        if (isCancelled) return;
+        setResolvedUid(user.uid);
         setUserDoc(null);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        await loadUserData(currentUser.uid);
-      } catch (e: unknown) {
         console.error("Me page error:", e);
         setError(getErrorMessage(e));
-      } finally {
-        setLoading(false);
-      }
-    });
+      });
 
-    return unsubscribe;
-  }, []);
+    return () => {
+      isCancelled = true;
+    };
+  }, [loading, user]);
 
-  const makeManager = async () => {
-    if (!user) return;
-
-    setUpdating(true);
-    setError(null);
+  const handleSignOut = async () => {
+    setSigningOut(true);
     try {
-      await setDoc(
-        doc(db, "users", user.uid),
-        {
-          email: user.email ?? "",
-          role: "manager",
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-      await loadUserData(user.uid);
+      await signOut(auth);
     } catch (e: unknown) {
-      console.error("Role update error:", e);
       setError(getErrorMessage(e));
     } finally {
-      setUpdating(false);
+      setSigningOut(false);
     }
   };
+
+  const visibleUserDoc = user && resolvedUid === user.uid ? userDoc : null;
+  const docLoading = !!user && !loading && resolvedUid !== user.uid;
+  const role = typeof visibleUserDoc?.role === "string" ? (visibleUserDoc.role as string) : "null";
+  const clubId = typeof visibleUserDoc?.clubId === "string" ? (visibleUserDoc.clubId as string) : "null";
+  const banned = visibleUserDoc?.banned === true ? "true" : "false";
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-10">
       <h1 className="mb-4 text-3xl font-semibold">/me (Debug)</h1>
 
-      {loading && <p>Yukleniyor...</p>}
-      {!loading && !user && <p>Login degilsin.</p>}
+      {loading && <p>Yükleniyor...</p>}
+      {!loading && docLoading && <p>Kullanıcı dokümanı yükleniyor...</p>}
+
+      {!loading && !user && (
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+          Not logged in
+        </p>
+      )}
 
       {!loading && user && (
-        <div className="space-y-4">
-          <p>
-            <strong>uid:</strong> {user.uid}
-          </p>
-          <p>
-            <strong>email:</strong> {user.email ?? "-"}
-          </p>
-          <p>
-            <strong>role:</strong> {role ?? "null"}
-          </p>
-
-          <button
-            type="button"
-            onClick={makeManager}
-            disabled={updating}
-            className="rounded-md border px-4 py-2 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Rolumu manager yap (DEV)
-          </button>
+        <div className="space-y-5">
+          <div className="grid gap-2 rounded-3xl border border-zinc-200 bg-white p-5 text-sm shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <p>
+              <span className="font-medium">uid:</span>{" "}
+              <span className="font-mono">{user.uid}</span>
+            </p>
+            <p>
+              <span className="font-medium">email:</span> {user.email ?? "-"}
+            </p>
+            <p>
+              <span className="font-medium">role:</span> {role}
+            </p>
+            <p>
+              <span className="font-medium">clubId:</span> {clubId}
+            </p>
+            <p>
+              <span className="font-medium">banned:</span> {banned}
+            </p>
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={handleSignOut}
+                disabled={signingOut}
+                className="rounded-xl border border-zinc-300 px-3 py-2 text-sm transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900"
+              >
+                {signingOut ? "Çıkış yapılıyor..." : "Çıkış Yap"}
+              </button>
+            </div>
+          </div>
 
           <div>
-            <p className="mb-1 font-medium">users/{"{uid}"} doc JSON</p>
-            <pre style={{ whiteSpace: "pre-wrap" }}>
-              {JSON.stringify(userDoc, null, 2) ?? "null"}
+            <p className="mb-2 font-medium">users/{"{uid}"} doc JSON</p>
+            <pre className="overflow-x-auto rounded-2xl bg-zinc-100 p-4 text-xs dark:bg-zinc-900">
+              {visibleUserDoc ? JSON.stringify(visibleUserDoc, null, 2) : "users/{uid} dokümanı bulunamadı."}
             </pre>
           </div>
         </div>
       )}
 
       {error && (
-        <pre style={{ color: "salmon", whiteSpace: "pre-wrap" }}>
+        <pre className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">
           {error}
         </pre>
       )}

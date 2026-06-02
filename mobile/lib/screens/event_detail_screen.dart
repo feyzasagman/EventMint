@@ -1,8 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import 'club_detail_screen.dart';
 import 'qr_scan_screen.dart';
 
 String pickString(Map data, List<String> keys) {
@@ -71,9 +71,7 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
   void initState() {
     super.initState();
     _eventData = widget.data;
-    if (!kIsWeb) {
-      _loadDetail();
-    }
+    _loadDetail();
   }
 
   Future<void> _loadDetail() async {
@@ -162,18 +160,6 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Etkinlik Detayı')),
-        body: const Center(
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('Web demo modu'),
-          ),
-        ),
-      );
-    }
-
     final data = _eventData;
 
     return Scaffold(
@@ -248,6 +234,22 @@ class _DetailContent extends StatelessWidget {
         Text(title, style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 16),
         _InfoRow(label: 'Kulüp', value: clubId),
+        if (clubId != '-') ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ClubDetailScreen(clubId: clubId),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.groups),
+              label: const Text('Kulüp sayfasına git'),
+            ),
+          ),
+        ],
         _InfoRow(label: 'Kategori', value: category),
         _InfoRow(label: 'Konum', value: location),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
