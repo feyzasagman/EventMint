@@ -2,8 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'clubs_list_screen.dart';
 import 'discover_screen.dart';
 import 'events_list_screen.dart';
+import 'login_screen.dart';
 import 'profile_screen.dart';
 
 class HomeShell extends StatefulWidget {
@@ -15,24 +17,15 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int currentIndex = 0;
-  late final Stream<int> _rsvpCount = _createRsvpCountStream();
-  late final Stream<bool> _hasBadge = _createHasBadgeStream();
 
   static const List<Widget> _screens = [
     EventsListScreen(showScaffold: false),
     DiscoverScreen(showScaffold: false),
+    ClubsListScreen(showScaffold: false),
     ProfileScreen(showScaffold: false),
   ];
 
-  String? get _uid => FirebaseAuth.instance.currentUser?.uid;
-
-  Stream<int> _createRsvpCountStream() async* {
-    final uid = _uid;
-    if (uid == null) {
-      yield 0;
-      return;
-    }
-
+  Stream<int> _createRsvpCountStream(String uid) async* {
     for (final collectionName in const ["RSVP'ler", 'rsvps']) {
       for (final uidField in const ['UID', 'uid']) {
         final initialSnapshot = await FirebaseFirestore.instance
@@ -57,17 +50,15 @@ class _HomeShellState extends State<HomeShell> {
         .map((snapshot) => snapshot.docs.length);
   }
 
-  Stream<bool> _createHasBadgeStream() {
-    final uid = _uid;
-    if (uid == null) return Stream<bool>.value(false);
+  Stream<bool> _createHasBadgeStream(String uid) {
     return FirebaseFirestore.instance
         .collection('Kullanıcılar')
         .doc(uid)
         .snapshots()
         .map((snapshot) {
-      final badges = snapshot.data()?['Rozetler'];
-      return badges is List && badges.isNotEmpty;
-    });
+          final badges = snapshot.data()?['Rozetler'];
+          return badges is List && badges.isNotEmpty;
+        });
   }
 
   Widget _rsvpBadgedIcon(IconData icon, int count) {
@@ -200,6 +191,11 @@ class _HomeShellState extends State<HomeShell> {
         );
       case 2:
         return FloatingActionButton(
+          onPressed: _showSearchDialog,
+          child: const Icon(Icons.search),
+        );
+      case 3:
+        return FloatingActionButton(
           onPressed: _showSettingsSheet,
           child: const Icon(Icons.settings),
         );
@@ -226,6 +222,17 @@ class _HomeShellState extends State<HomeShell> {
         );
       case 2:
         return AppBar(
+          title: const Text('Kulüpler'),
+          actions: [
+            IconButton(
+              tooltip: 'Kulüp ara',
+              onPressed: () {},
+              icon: const Icon(Icons.search),
+            ),
+          ],
+        );
+      case 3:
+        return AppBar(
           title: const Text('Profil'),
           actions: [
             IconButton(
@@ -246,7 +253,7 @@ class _HomeShellState extends State<HomeShell> {
             ),
             IconButton(
               tooltip: 'Profil',
-              onPressed: () => setState(() => currentIndex = 2),
+              onPressed: () => setState(() => currentIndex = 3),
               icon: const Icon(Icons.person),
             ),
           ],
@@ -256,45 +263,69 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<int>(
-      stream: _rsvpCount,
-      builder: (context, rsvpSnapshot) {
-        return StreamBuilder<bool>(
-          stream: _hasBadge,
-          builder: (context, badgeSnapshot) {
-            final rsvpCount = rsvpSnapshot.data ?? 0;
-            final hasBadge = badgeSnapshot.data ?? false;
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, authSnapshot) {
+        if (authSnapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
 
-            return Scaffold(
-              appBar: _buildAppBar(),
-              body: IndexedStack(index: currentIndex, children: _screens),
-              floatingActionButton: _buildFab(),
-              bottomNavigationBar: NavigationBar(
-                selectedIndex: currentIndex,
-                onDestinationSelected: (index) {
-                  setState(() => currentIndex = index);
-                },
-                destinations: [
-                  NavigationDestination(
-                    icon: _rsvpBadgedIcon(Icons.event_outlined, rsvpCount),
-                    selectedIcon: _rsvpBadgedIcon(Icons.event, rsvpCount),
-                    label: 'Etkinlikler',
+        final user = authSnapshot.data;
+        if (user == null) {
+          return const LoginScreen();
+        }
+
+        return StreamBuilder<int>(
+          stream: _createRsvpCountStream(user.uid),
+          builder: (context, rsvpSnapshot) {
+            return StreamBuilder<bool>(
+              stream: _createHasBadgeStream(user.uid),
+              builder: (context, badgeSnapshot) {
+                final rsvpCount = rsvpSnapshot.data ?? 0;
+                final hasBadge = badgeSnapshot.data ?? false;
+
+                return Scaffold(
+                  appBar: _buildAppBar(),
+                  body: IndexedStack(index: currentIndex, children: _screens),
+                  floatingActionButton: _buildFab(),
+                  bottomNavigationBar: NavigationBar(
+                    selectedIndex: currentIndex,
+                    onDestinationSelected: (index) {
+                      setState(() => currentIndex = index);
+                    },
+                    destinations: [
+                      NavigationDestination(
+                        icon: _rsvpBadgedIcon(Icons.event_outlined, rsvpCount),
+                        selectedIcon: _rsvpBadgedIcon(Icons.event, rsvpCount),
+                        label: 'Etkinlikler',
+                      ),
+                      const NavigationDestination(
+                        icon: Icon(Icons.explore_outlined),
+                        selectedIcon: Icon(Icons.explore),
+                        label: 'Keşfet',
+                      ),
+                      const NavigationDestination(
+                        icon: Icon(Icons.groups_outlined),
+                        selectedIcon: Icon(Icons.groups),
+                        label: 'Kulüpler',
+                      ),
+                      NavigationDestination(
+                        icon: _profileBadgedIcon(
+                          Icons.person_outline,
+                          hasBadge,
+                        ),
+                        selectedIcon: _profileBadgedIcon(
+                          Icons.person,
+                          hasBadge,
+                        ),
+                        label: 'Profil',
+                      ),
+                    ],
                   ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.explore_outlined),
-                    selectedIcon: Icon(Icons.explore),
-                    label: 'Keşfet',
-                  ),
-                  NavigationDestination(
-                    icon: _profileBadgedIcon(
-                      Icons.person_outline,
-                      hasBadge,
-                    ),
-                    selectedIcon: _profileBadgedIcon(Icons.person, hasBadge),
-                    label: 'Profil',
-                  ),
-                ],
-              ),
+                );
+              },
             );
           },
         );
