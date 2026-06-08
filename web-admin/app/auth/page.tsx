@@ -8,10 +8,11 @@ import {
   signOut,
   signInWithEmailAndPassword,
 } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { AuthCard, AuthMode } from "../components/AuthCard";
 import { auth, db } from "../../lib/firebase";
-import { isUserBanned } from "../../lib/guard";
+import { getUserRecord, isUserBanned } from "../../lib/guard";
+import { isAdminPanelRole, normalizeAppRole, postLoginPath } from "../../lib/role";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : JSON.stringify(error);
@@ -33,7 +34,32 @@ function AuthContent() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const destination = "/events";
+  const ensureUserDocument = async (uid: string, userEmail: string) => {
+    const userRef = doc(db, "users", uid);
+    const snapshot = await getDoc(userRef);
+    if (snapshot.exists()) return;
+
+    await setDoc(userRef, {
+      email: userEmail,
+      role: "student",
+      banned: false,
+      createdAt: serverTimestamp(),
+    });
+  };
+
+  const resolveDestination = async (uid: string) => {
+    const record = await getUserRecord(uid);
+    return postLoginPath(normalizeAppRole(record.role));
+  };
+
+  const handleDemo = async () => {
+    const user = auth.currentUser;
+    if (user) {
+      router.push(await resolveDestination(user.uid));
+      return;
+    }
+    router.push("/events");
+  };
 
   const handleSubmit = async () => {
     setLoading(true);
@@ -67,15 +93,24 @@ function AuthContent() {
           router.replace("/auth?banned=1");
           return;
         }
+
+        router.push("/app/events");
       } else {
         const credential = await signInWithEmailAndPassword(auth, email, password);
+        await ensureUserDocument(credential.user.uid, email);
         if (await isUserBanned(credential.user.uid)) {
           await signOut(auth);
           router.replace("/auth?banned=1");
           return;
         }
+
+        const record = await getUserRecord(credential.user.uid);
+        const role = normalizeAppRole(record.role);
+        if (mode === "admin" && !isAdminPanelRole(role)) {
+          setError("Bu hesap yönetici paneline erişemez. Öğrenci paneline yönlendiriliyorsun.");
+        }
+        router.push(postLoginPath(role));
       }
-      router.push(destination);
     } catch (e: unknown) {
       setError(getErrorMessage(e));
     } finally {
@@ -139,7 +174,7 @@ function AuthContent() {
             onPasswordConfirmChange={setPasswordConfirm}
             onSubmit={handleSubmit}
             onForgotPassword={handleForgotPassword}
-            onDemo={() => router.push(destination)}
+            onDemo={handleDemo}
           />
         </div>
       </div>

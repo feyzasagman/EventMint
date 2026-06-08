@@ -4,6 +4,9 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../services/badge_service.dart';
+import '../services/club_repo.dart';
+
 class QRScanScreen extends StatefulWidget {
   const QRScanScreen({super.key});
 
@@ -53,8 +56,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
 
       final sessionId = parts[0].trim();
       final nonce = parts[1].trim();
-      final sessionDoc = await FirebaseFirestore.instance
-          .collection('sessions')
+      final sessionDoc = await ClubRepo.col(ClubRepo.sessions)
           .doc(sessionId)
           .get();
 
@@ -102,9 +104,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
         return;
       }
       final uid = user.uid;
-      final checkinRef = FirebaseFirestore.instance
-          .collection('Check-in')
-          .doc('${eventId}_$uid');
+      final checkinRef = ClubRepo.checkinDoc(eventId, uid);
       final existingCheckin = await checkinRef.get();
       if (existingCheckin.exists) {
         _showScanError('Zaten check-in yaptın');
@@ -114,24 +114,19 @@ class _QRScanScreenState extends State<QRScanScreen> {
       await checkinRef.set({
         'eventId': eventId,
         'sessionId': sessionId,
-        'checkinAt': FieldValue.serverTimestamp(),
-        'UID': uid,
         'uid': uid,
+        'checkinAt': FieldValue.serverTimestamp(),
       });
       debugPrint('CHECKIN: saved ok, now adding points...');
-      final pointsUpdated = await _addCheckinPoints(uid);
-      final newBadgeLabels = <String>['İlk Katılım'];
-      final reward = CheckinRewardResult(
-        pointsUpdated: pointsUpdated,
-        newBadgeLabels: newBadgeLabels,
-      );
+      final reward = await awardCheckinBadges(uid);
 
       if (!mounted) return;
 
+      final newBadgeLabels = reward.newBadgeLabels;
       final badgeMessage = newBadgeLabels.isEmpty
           ? null
           : 'Yeni rozet: ${newBadgeLabels.join(', ')}';
-      final successMessage = pointsUpdated
+      final successMessage = reward.pointsUpdated
           ? badgeMessage ?? 'Check-in başarılı ✅ +10 puan kazandın'
           : 'Puan güncellenemedi';
 
@@ -182,57 +177,6 @@ class _QRScanScreenState extends State<QRScanScreen> {
   void _verifyManualCode() {
     final rawValue = _manualCodeController.text.trim();
     _handleCode(rawValue);
-  }
-
-  Future<bool> _addCheckinPoints(String uid) async {
-    final firestore = FirebaseFirestore.instance;
-    final userRef = firestore.collection('Kullanıcılar').doc(uid);
-
-    try {
-      final badgeEarnedAt = Timestamp.now();
-      final userDoc = await userRef.get();
-      final userData = userDoc.data() ?? <String, dynamic>{};
-      final existingBadges = userData['Rozetler'];
-      final existingBadgeIds = <String>{};
-      if (existingBadges is List) {
-        for (final badge in existingBadges) {
-          if (badge is Map) {
-            final id = badge['id']?.toString().trim();
-            if (id != null && id.isNotEmpty) {
-              existingBadgeIds.add(id);
-            }
-          }
-        }
-      }
-      final shouldAddFirstAttend = !existingBadgeIds.contains('FIRST_ATTEND');
-      final updateData = <String, dynamic>{
-        'pointsTotal': FieldValue.increment(10),
-        'lastBadgeWrite': FieldValue.serverTimestamp(),
-        'debugWrite': FieldValue.serverTimestamp(),
-      };
-      if (shouldAddFirstAttend) {
-        updateData['Rozetler'] = FieldValue.arrayUnion([
-          {'id': 'FIRST_ATTEND', 'earnedAt': badgeEarnedAt},
-        ]);
-      }
-      debugPrint('BADGE: about to write FIRST_ATTEND via userRef.set');
-      debugPrint('USERREF PATH => ${userRef.path}');
-      debugPrint('UID => $uid');
-      await userRef.set(updateData, SetOptions(merge: true));
-      debugPrint('BADGE: wrote Rozetler + lastBadgeWrite');
-      debugPrint('BADGE: userRef.set completed');
-      return true;
-    } on FirebaseException catch (error, st) {
-      debugPrint('FIRESTORE ERROR: $error');
-      debugPrint('$st');
-      debugPrint('Puan güncellenemedi: ${error.message ?? error.code}');
-      return false;
-    } catch (error, st) {
-      debugPrint('BADGE ERROR: $error');
-      debugPrint('$st');
-      debugPrint('Puan güncellenemedi: $error');
-      return false;
-    }
   }
 
   @override
@@ -333,12 +277,4 @@ class _QRScanScreenState extends State<QRScanScreen> {
   }
 }
 
-class CheckinRewardResult {
-  const CheckinRewardResult({
-    required this.pointsUpdated,
-    required this.newBadgeLabels,
-  });
-
-  final bool pointsUpdated;
-  final List<String> newBadgeLabels;
-}
+typedef CheckinRewardResult = BadgeAwardResult;

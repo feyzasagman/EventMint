@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../services/badge_service.dart';
+import '../services/club_repo.dart';
 String _firestoreErrorText(Object? error) {
   if (error is FirebaseException) {
     return error.message ?? error.code;
@@ -21,10 +23,12 @@ class ClubManageScreen extends StatefulWidget {
     super.key,
     required this.clubId,
     this.initialTabIndex = 0,
+    this.scrollToPostSection = false,
   });
 
   final String clubId;
   final int initialTabIndex;
+  final bool scrollToPostSection;
 
   @override
   State<ClubManageScreen> createState() => _ClubManageScreenState();
@@ -36,6 +40,7 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
   final _descriptionController = TextEditingController();
   final _tagsController = TextEditingController();
   final _announcementController = TextEditingController();
+  final _postSectionKey = GlobalKey();
 
   bool _loading = true;
   bool _saving = false;
@@ -44,12 +49,26 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
   String? _error;
 
   DocumentReference<Map<String, dynamic>> get _clubRef =>
-      FirebaseFirestore.instance.collection('Kulüpler').doc(widget.clubId);
-
+      ClubRepo.clubDoc(widget.clubId);
   @override
   void initState() {
     super.initState();
     _loadClub();
+  }
+
+  void _scrollToPostSectionIfNeeded() {
+    if (!widget.scrollToPostSection || _loading) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final targetContext = _postSectionKey.currentContext;
+      if (targetContext != null) {
+        Scrollable.ensureVisible(
+          targetContext,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   @override
@@ -65,11 +84,11 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
     try {
       final snapshot = await _clubRef.get();
       final data = snapshot.data() ?? <String, dynamic>{};
-      _nameController.text = _asString(data['Reklam'] ?? data['ad']);
+      _nameController.text = _asString(data['name'] ?? data['ad']);
       _clubName = _nameController.text.isEmpty
           ? widget.clubId
           : _nameController.text;
-      _descriptionController.text = _asString(data['aciklama']);
+      _descriptionController.text = _asString(data['bio'] ?? data['aciklama']);
       _tagsController.text = _pickTags(data).join(', ');
     } on FirebaseException catch (e, st) {
       _logFirestoreError(e, st);
@@ -80,6 +99,7 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
     } finally {
       if (mounted) {
         setState(() => _loading = false);
+        _scrollToPostSectionIfNeeded();
       }
     }
   }
@@ -95,10 +115,9 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
     try {
       final name = _nameController.text.trim();
       await _clubRef.set({
-        'Reklam': name,
-        'ad': name,
-        'aciklama': _descriptionController.text.trim(),
-        'etiketler': _tagsController.text
+        'name': name,
+        'bio': _descriptionController.text.trim(),
+        'tags': _tagsController.text
             .split(',')
             .map((tag) => tag.trim())
             .where((tag) => tag.isNotEmpty)
@@ -131,14 +150,13 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
     setState(() => _sharing = true);
 
     try {
-      final ref = FirebaseFirestore.instance
-          .collection('KulüpPaylasimlari')
-          .doc();
+      ClubRepo.logCollection(ClubRepo.clubPosts, op: 'create');
+      final ref = ClubRepo.col(ClubRepo.clubPosts).doc();
       await ref.set({
-        'kulupId': widget.clubId,
-        'UID': user.uid,
-        'metin': text,
-        'olusturulduAt': FieldValue.serverTimestamp(),
+        'clubId': widget.clubId,
+        'uid': user.uid,
+        'text': text,
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
       _announcementController.clear();
@@ -168,15 +186,16 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
-      initialIndex: widget.initialTabIndex.clamp(0, 1),
+      length: 3,
+      initialIndex: widget.initialTabIndex.clamp(0, 2),
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Kulüp Yönetimi'),
           bottom: const TabBar(
             tabs: [
-              Tab(text: 'Paylaşım Yap'),
-              Tab(text: 'Üyelik Başvuruları'),
+              Tab(text: 'Kulüp & Paylaşım'),
+              Tab(text: 'Başvurular'),
+              Tab(text: 'Üyeler'),
             ],
           ),
         ),
@@ -192,6 +211,7 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
                     descriptionController: _descriptionController,
                     tagsController: _tagsController,
                     announcementController: _announcementController,
+                    postSectionKey: _postSectionKey,
                     error: _error,
                     saving: _saving,
                     sharing: _sharing,
@@ -199,6 +219,7 @@ class _ClubManageScreenState extends State<ClubManageScreen> {
                     onShareAnnouncement: _shareAnnouncement,
                   ),
                   _MembershipApplicationsTab(clubId: widget.clubId),
+                  _ClubMembersTab(clubId: widget.clubId),
                 ],
               ),
       ),
@@ -215,6 +236,7 @@ class _ShareTab extends StatelessWidget {
     required this.descriptionController,
     required this.tagsController,
     required this.announcementController,
+    required this.postSectionKey,
     required this.error,
     required this.saving,
     required this.sharing,
@@ -229,6 +251,7 @@ class _ShareTab extends StatelessWidget {
   final TextEditingController descriptionController;
   final TextEditingController tagsController;
   final TextEditingController announcementController;
+  final Key postSectionKey;
   final String? error;
   final bool saving;
   final bool sharing;
@@ -256,7 +279,7 @@ class _ShareTab extends StatelessWidget {
               TextFormField(
                 controller: nameController,
                 decoration: const InputDecoration(
-                  labelText: 'Reklam / Kulüp adı',
+                  labelText: 'Kulüp adı',
                   border: OutlineInputBorder(),
                 ),
                 validator: (value) {
@@ -310,24 +333,35 @@ class _ShareTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 28),
-        Text('Duyuru Paylaş', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        TextField(
-          controller: announcementController,
-          minLines: 3,
-          maxLines: 6,
-          decoration: const InputDecoration(
-            hintText: 'Duyuru metni',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: sharing ? null : onShareAnnouncement,
-            icon: const Icon(Icons.campaign),
-            label: Text(sharing ? 'Paylaşılıyor...' : 'Paylaş'),
+        KeyedSubtree(
+          key: postSectionKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Duyuru Paylaş',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: announcementController,
+                minLines: 3,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  hintText: 'Duyuru metni',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: sharing ? null : onShareAnnouncement,
+                  icon: const Icon(Icons.campaign),
+                  label: Text(sharing ? 'Paylaşılıyor...' : 'Paylaş'),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -348,39 +382,42 @@ class _MembershipApplicationsTab extends StatelessWidget {
     if (currentUid == null) return;
 
     final data = doc.data();
-    final applicantUid = _asString(data['UID'] ?? data['uid']);
+    final applicantUid = _asString(data['uid']);
     if (applicantUid.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Başvuruda UID bulunamadı.')),
+        const SnackBar(content: Text('Başvuruda uid bulunamadı.')),
       );
       return;
     }
 
     final batch = FirebaseFirestore.instance.batch();
     batch.update(doc.reference, {
-      'durum': 'onayli',
-      'incelendiAt': FieldValue.serverTimestamp(),
-      'incelendiUID': currentUid,
+      'status': 'approved',
+      'reviewedAt': FieldValue.serverTimestamp(),
+      'reviewedByUid': currentUid,
     });
     batch.set(
-      FirebaseFirestore.instance
-          .collection('KulüpÜyeleri')
-          .doc('${clubId}_$applicantUid'),
+      ClubRepo.clubMemberDoc(clubId, applicantUid),
       {
-        'kulupId': clubId,
-        'UID': applicantUid,
-        'katildiAt': FieldValue.serverTimestamp(),
-        'rol': 'uye',
+        'clubId': clubId,
+        'uid': applicantUid,
+        'joinedAt': FieldValue.serverTimestamp(),
+        'role': 'member',
+        if (_asString(data['adSoyad'] ?? data['fullName']).isNotEmpty)
+          'displayName': _asString(data['adSoyad'] ?? data['fullName']),
       },
-      SetOptions(merge: true),
     );
 
     try {
       await batch.commit();
+      final newBadges = await awardClubMemberBadge(applicantUid);
       if (!context.mounted) return;
+      final message = newBadges.isEmpty
+          ? 'Başvuru onaylandı.'
+          : 'Başvuru onaylandı • Yeni rozet: ${newBadges.join(', ')}';
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Başvuru onaylandı.')));
+      ).showSnackBar(SnackBar(content: Text(message)));
     } on FirebaseException catch (e, st) {
       _logFirestoreError(e, st);
       if (!context.mounted) return;
@@ -405,9 +442,9 @@ class _MembershipApplicationsTab extends StatelessWidget {
 
     try {
       await doc.reference.update({
-        'durum': 'reddedildi',
-        'incelendiAt': FieldValue.serverTimestamp(),
-        'incelendiUID': currentUid,
+        'status': 'rejected',
+        'reviewedAt': FieldValue.serverTimestamp(),
+        'reviewedByUid': currentUid,
       });
 
       if (!context.mounted) return;
@@ -431,10 +468,9 @@ class _MembershipApplicationsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stream = FirebaseFirestore.instance
-        .collection('KulüpBaşvuruları')
-        .where('kulupId', isEqualTo: clubId)
-        .where('durum', isEqualTo: 'beklemede')
+    ClubRepo.logCollection(ClubRepo.clubApplications, op: 'listPending:$clubId');
+    final stream = ClubRepo.col(ClubRepo.clubApplications)
+        .where('clubId', isEqualTo: clubId)
         .snapshots();
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -453,7 +489,12 @@ class _MembershipApplicationsTab extends StatelessWidget {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final docs = snapshot.data!.docs.toList()
+        final docs = snapshot.data!.docs
+            .where((doc) {
+              final status = _asString(doc.data()['status']).toLowerCase();
+              return status == 'pending';
+            })
+            .toList()
           ..sort((a, b) {
             final aDate = a.data()['olusturulduAt'] ?? a.data()['createdAt'];
             final bDate = b.data()['olusturulduAt'] ?? b.data()['createdAt'];
@@ -473,11 +514,11 @@ class _MembershipApplicationsTab extends StatelessWidget {
           itemBuilder: (context, index) {
             final doc = docs[index];
             final data = doc.data();
-            final adSoyad = _asString(data['adSoyad']);
-            final bolum = _asString(data['bolum']);
-            final ogrNo = _asString(data['ogrNo']);
-            final motivation = _asString(data['motivation']);
-            final createdAt = data['olusturulduAt'] ?? data['createdAt'];
+            final fullName = _asString(data['fullName'] ?? data['adSoyad']);
+            final department = _asString(data['department'] ?? data['bolum']);
+            final studentNo = _asString(data['studentNo'] ?? data['ogrNo']);
+            final motivation = _asString(data['motivation'] ?? data['motivasyon']);
+            final createdAt = data['createdAt'];
 
             return Card(
               child: Padding(
@@ -486,13 +527,13 @@ class _MembershipApplicationsTab extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      adSoyad.isEmpty ? 'İsimsiz başvuru' : adSoyad,
+                      fullName.isEmpty ? 'İsimsiz başvuru' : fullName,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    if (bolum.isNotEmpty) Text('Bölüm: $bolum'),
-                    if (ogrNo.isNotEmpty) Text('Öğrenci No: $ogrNo'),
+                    if (department.isNotEmpty) Text('Bölüm: $department'),
+                    if (studentNo.isNotEmpty) Text('Öğrenci No: $studentNo'),
                     if (motivation.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Text(motivation),
@@ -533,10 +574,81 @@ class _MembershipApplicationsTab extends StatelessWidget {
   }
 }
 
+class _ClubMembersTab extends StatelessWidget {
+  const _ClubMembersTab({required this.clubId});
+
+  final String clubId;
+
+  @override
+  Widget build(BuildContext context) {
+    ClubRepo.logCollection(ClubRepo.clubMembers, op: 'listMembers:$clubId');
+    final stream = ClubRepo.col(ClubRepo.clubMembers)
+        .where('clubId', isEqualTo: clubId)
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: stream,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          _logFirestoreError(snapshot.error!);
+          return Center(
+            child: Text(
+              'Üyeler alınamadı: ${_firestoreErrorText(snapshot.error)}',
+            ),
+          );
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snapshot.data!.docs.toList()
+          ..sort((a, b) {
+            final aDate = a.data()['joinedAt'];
+            final bDate = b.data()['joinedAt'];
+            final aMs = aDate is Timestamp ? aDate.millisecondsSinceEpoch : 0;
+            final bMs = bDate is Timestamp ? bDate.millisecondsSinceEpoch : 0;
+            return bMs.compareTo(aMs);
+          });
+
+        if (docs.isEmpty) {
+          return const Center(child: Text('Henüz onaylı üye yok.'));
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 12),
+          itemBuilder: (context, index) {
+            final data = docs[index].data();
+            final displayName = _asString(
+              data['displayName'] ?? data['adSoyad'] ?? data['name'],
+            );
+            final uid = _asString(data['uid']);
+            final role = _asString(data['role']).isEmpty
+                ? 'member'
+                : _asString(data['role']);
+            final joinedAt = data['joinedAt'];
+
+            return Card(
+              child: ListTile(
+                title: Text(displayName.isEmpty ? (uid.isEmpty ? 'Üye' : uid) : displayName),
+                subtitle: Text(
+                  'Rol: $role${joinedAt is Timestamp ? ' · ${_formatTimestamp(joinedAt)}' : ''}',
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 String _asString(Object? value) => value?.toString().trim() ?? '';
 
 List<String> _pickTags(Map<String, dynamic> data) {
-  final value = data['etiketler'] ?? data['Etiketler'] ?? data['tags'];
+  final value = data['tags'] ?? data['etiketler'];
   if (value is List) {
     return value
         .map((tag) => tag.toString().trim())

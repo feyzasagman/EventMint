@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card } from "./ui/card";
 import { Chip } from "./ui/chip";
 
@@ -8,6 +9,7 @@ export type EventCardProps = {
   category?: string;
   location?: string;
   tags?: string[];
+  href?: string;
   actions?: React.ReactNode;
 };
 
@@ -18,13 +20,14 @@ export function EventCard({
   category,
   location,
   tags = [],
+  href,
   actions,
 }: EventCardProps) {
   const visibleTags = tags.slice(0, 2);
   const hiddenTagCount = tags.length - visibleTags.length;
 
-  return (
-    <Card className="flex min-h-60 flex-col p-5 transition hover:-translate-y-0.5 hover:shadow-md">
+  const body = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <h2 className="line-clamp-2 text-lg font-semibold tracking-tight">
           {title || "Untitled Event"}
@@ -48,6 +51,18 @@ export function EventCard({
           <span aria-hidden>📍</span> {location || "-"}
         </span>
       </div>
+    </>
+  );
+
+  return (
+    <Card className={`flex min-h-60 flex-col p-5 transition hover:-translate-y-0.5 hover:shadow-md ${href ? "cursor-pointer" : ""}`}>
+      {href ? (
+        <Link href={href} className="block flex-1 text-inherit no-underline">
+          {body}
+        </Link>
+      ) : (
+        body
+      )}
 
       <div className="mt-auto flex items-end justify-between gap-3 pt-5">
         <div className="flex flex-wrap gap-2">

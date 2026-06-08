@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../../../lib/firebase";
+import { type ClubListItem, subscribeClubs } from "../../../../lib/clubRepo";
 import { getUserRecord } from "../../../../lib/guard";
 import { useAuth } from "../../../providers/AuthProvider";
 import { InlineNotice } from "../../../components/InlineNotice";
@@ -30,10 +31,7 @@ type UserRow = {
   banned: boolean;
 };
 
-type ClubOption = {
-  id: string;
-  label: string;
-};
+type ClubOption = ClubListItem;
 
 type Draft = { role: UserRole; clubId: string; banned: boolean };
 type NoticeState = { tone: "success" | "error" | "info"; message: string } | null;
@@ -67,16 +65,6 @@ function mapUsers(snapshot: QuerySnapshot<DocumentData>): UserRow[] {
       role: normalizeRole(data.role),
       clubId: pickString(data, ["clubId", "Kulup", "Kulüp", "kulup", "kulüp"]),
       banned: data.banned === true,
-    };
-  });
-}
-
-function mapClubs(snapshot: QuerySnapshot<DocumentData>): ClubOption[] {
-  return snapshot.docs.map((clubDoc) => {
-    const data = clubDoc.data() as Record<string, unknown>;
-    return {
-      id: clubDoc.id,
-      label: pickString(data, ["ad", "Reklam", "name", "title", "Ad"]) ?? clubDoc.id,
     };
   });
 }
@@ -155,9 +143,8 @@ export default function AdminUsersPage() {
       (error) => setNotice({ tone: "error", message: `Kullanıcılar okunamadı: ${error.message}` })
     );
 
-    const unsubscribeClubs = onSnapshot(
-      collection(db, "Kulüpler"),
-      (snapshot) => setClubs(mapClubs(snapshot)),
+    const unsubscribeClubs = subscribeClubs(
+      setClubs,
       (error) => setNotice({ tone: "error", message: `Kulüpler okunamadı: ${error.message}` })
     );
 

@@ -6,7 +6,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, DocumentData, onSnapshot, Timestamp, updateDoc } from "firebase/firestore";
 import { QRCodeSVG } from "qrcode.react";
 import { auth, db } from "../../../../../lib/firebase";
-import { getUserRole } from "../../../../../lib/role";
+import { getUserRole, isAdminPanelRole } from "../../../../../lib/role";
 import { Button } from "../../../../components/ui/button";
 import { Card } from "../../../../components/ui/card";
 
@@ -59,7 +59,7 @@ export default function EventQrPage() {
 
       try {
         const role = isDemoMode ? "admin" : await getUserRole(user!.uid);
-        setHasAccess(role === "admin" || role === "club_manager" || role === "manager");
+        setHasAccess(role !== null && isAdminPanelRole(role));
       } catch (e: unknown) {
         setError(getErrorMessage(e));
       } finally {

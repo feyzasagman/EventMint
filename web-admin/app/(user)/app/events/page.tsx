@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -20,6 +21,7 @@ import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
 import { Chip } from "../../../components/ui/chip";
 import { auth, db } from "../../../../lib/firebase";
+import { COL } from "../../../../lib/collections";
 
 type EventItem = {
   id: string;
@@ -73,6 +75,7 @@ function mapEvents(snapshot: QuerySnapshot<DocumentData>) {
 }
 
 export default function UserEventsPage() {
+  const router = useRouter();
   const [uid, setUid] = useState("demo-user");
   const [events, setEvents] = useState<EventItem[]>([]);
   const [rsvps, setRsvps] = useState<Set<string>>(new Set());
@@ -122,13 +125,33 @@ export default function UserEventsPage() {
   }, []);
 
   useEffect(() => {
+    if (uid === "demo-user") return;
     const stop = onSnapshot(
-      query(collection(db, "RSVP'ler"), where("UID", "==", uid)),
+      query(collection(db, COL.rsvps), where("uid", "==", uid)),
       (snapshot) => setRsvps(new Set(snapshot.docs.map((docSnapshot) => String(docSnapshot.data().eventId ?? "")))),
       () => setRsvps(new Set())
     );
     return stop;
   }, [uid]);
+
+  const joinEvent = async (eventId: string) => {
+    if (uid === "demo-user") return;
+    setJoiningId(eventId);
+    try {
+      await setDoc(
+        doc(db, COL.rsvps, `${eventId}_${uid}`),
+        {
+          eventId,
+          uid,
+          createdAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      setRsvps((current) => new Set(current).add(eventId));
+    } finally {
+      setJoiningId(null);
+    }
+  };
 
   const filteredEvents = useMemo(() => {
     const queryText = searchQuery.trim().toLowerCase();
@@ -144,31 +167,12 @@ export default function UserEventsPage() {
     });
   }, [events, searchQuery, selectedCategory]);
 
-  const joinEvent = async (eventId: string) => {
-    setJoiningId(eventId);
-    try {
-      await setDoc(
-        doc(db, "RSVP'ler", `${eventId}_${uid}`),
-        {
-          eventId,
-          UID: uid,
-          uid,
-          createdAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-      setRsvps((current) => new Set(current).add(eventId));
-    } finally {
-      setJoiningId(null);
-    }
-  };
-
   return (
     <>
       <div className="mb-8">
-        <p className="text-sm font-medium uppercase tracking-wide text-indigo-600">Öğrenci Paneli</p>
+        <p className="text-sm font-medium uppercase tracking-wide text-brand">Öğrenci Paneli</p>
         <h1 className="mt-1 text-4xl font-semibold tracking-tight">Etkinlikler</h1>
-        <p className="mt-2 text-sm text-slate-600">Kulüp etkinliklerini keşfet ve katılımını bildir.</p>
+        <p className="mt-2 text-sm text-text2">Kulüp etkinliklerini keşfet ve katılımını bildir.</p>
       </div>
 
       <Card className="mb-6 p-4">
@@ -193,7 +197,7 @@ export default function UserEventsPage() {
         </div>
       </Card>
 
-      {loading && <div className="grid gap-4 md:grid-cols-2">{[0, 1, 2, 3].map((item) => <div key={item} className="h-56 animate-pulse rounded-3xl bg-slate-100" />)}</div>}
+      {loading && <div className="grid gap-4 md:grid-cols-2">{[0, 1, 2, 3].map((item) => <div key={item} className="h-56 animate-pulse rounded-3xl bg-surface2" />)}</div>}
       {error && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">{error}</p>}
 
       {!loading && !error && filteredEvents.length === 0 && (
@@ -208,9 +212,12 @@ export default function UserEventsPage() {
               <li key={event.id}>
                 <EventCard
                   {...event}
+                  href={`/app/events/${event.id}`}
                   actions={
                     isJoined ? (
-                      <Chip className="bg-green-50 text-green-700">Katılacağım ✅</Chip>
+                      <Button type="button" variant="secondary" onClick={() => router.push(`/app/events/${event.id}`)}>
+                        Detay / QR
+                      </Button>
                     ) : (
                       <Button
                         type="button"

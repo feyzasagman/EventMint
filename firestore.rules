@@ -1,0 +1,279 @@
+rules_version = '2';
+
+// EventMint — hardened Security Rules (prototype: review before broad release)
+//
+// Assumed roles on users/{uid}: admin | club_manager | student
+// Legacy role strings (kulüp_yöneticisi, manager) treated as club_manager in helpers.
+//
+// Doc ID patterns:
+//   checkins/{eventId}_{uid}
+//   rsvps/{eventId}_{uid}
+//   club_members/{clubId}_{uid}
+//   club_applications/{clubId}_{uid}
+//   clubs/{clubId}  (handle)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helpers
+    // ===============================================================
+
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return isAuth() && request.auth.uid == uid;
+    }
+
+    function userDocPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function userDocExists() {
+      return isAuth() && exists(userDocPath());
+    }
+
+    function userData() {
+      return get(userDocPath()).data;
+    }
+
+    function userRole() {
+      return userDocExists() ? userData().role : '';
+    }
+
+    function isAdmin() {
+      return userDocExists() && userRole() == 'admin';
+    }
+
+    function isClubManager() {
+      return userDocExists() && userRole() in ['club_manager', 'kulüp_yöneticisi', 'manager'];
+    }
+
+    function managerClubId() {
+      return userDocExists() && 'clubId' in userData() ? userData().clubId : '';
+    }
+
+    function canManageClub(clubId) {
+      return isAdmin() || (isClubManager() && managerClubId() == clubId);
+    }
+
+    function isLegacyCollection(collectionId) {
+      return collectionId in [
+        'Check-in',
+        'RSVP\'ler',
+        'Kullanıcılar',
+        'Kulüpler',
+        'KulüpÜyeleri',
+        'KulüpBaşvuruları',
+        'KulüpPaylasimlari',
+        'Etkinlikler'
+      ];
+    }
+
+    function selfUserUpdateAllowed() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['Rozetler', 'pointsTotal', 'lastBadgeWrite', 'badges']);
+    }
+
+    function privilegedUserFieldsUnchanged() {
+      return request.resource.data.get('role', resource.data.get('role', 'student'))
+          == resource.data.get('role', 'student')
+        && request.resource.data.get('clubId', resource.data.get('clubId', ''))
+          == resource.data.get('clubId', '')
+        && request.resource.data.get('banned', resource.data.get('banned', false))
+          == resource.data.get('banned', false);
+    }
+
+    // ===============================================================
+    // users
+    // ===============================================================
+
+    match /users/{uid} {
+      allow read: if isAuth() && (isSelf(uid) || isAdmin());
+
+      allow create: if isSelf(uid)
+        && request.resource.data.role == 'student'
+        && request.resource.data.banned == false
+        && request.resource.data.email is string;
+
+      allow update: if isAdmin()
+        || (isSelf(uid) && selfUserUpdateAllowed() && privilegedUserFieldsUnchanged());
+
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // checkins
+    // ===============================================================
+
+    match /checkins/{docId} {
+      allow read: if isAuth()
+        && (
+          !exists(/databases/$(database)/documents/checkins/$(docId))
+          || resource.data.uid == request.auth.uid
+          || isAdmin()
+          || isClubManager()
+        );
+
+      allow create: if isAuth()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.eventId is string
+        && docId == request.resource.data.eventId + '_' + request.auth.uid
+        && !exists(/databases/$(database)/documents/checkins/$(docId));
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // rsvps
+    // ===============================================================
+
+    match /rsvps/{docId} {
+      allow read: if isAuth()
+        && (
+          !exists(/databases/$(database)/documents/rsvps/$(docId))
+          || resource.data.uid == request.auth.uid
+          || isAdmin()
+          || isClubManager()
+        );
+
+      allow create, update: if isAuth()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.eventId is string
+        && docId == request.resource.data.eventId + '_' + request.auth.uid;
+
+      allow delete: if isAuth()
+        && (resource.data.uid == request.auth.uid || isAdmin());
+    }
+
+    // ===============================================================
+    // events
+    // ===============================================================
+
+    match /events/{eventId} {
+      allow read: if isAuth();
+
+      allow create: if isAuth() && (
+        isAdmin()
+        || (isClubManager() && request.resource.data.clubId == managerClubId())
+      );
+
+      allow update, delete: if isAuth() && (
+        isAdmin()
+        || (isClubManager() && resource.data.clubId == managerClubId())
+      );
+    }
+
+    // ===============================================================
+    // clubs
+    // ===============================================================
+
+    match /clubs/{clubId} {
+      allow read: if isAuth();
+
+      allow create: if isAuth()
+        && request.resource.data.status == 'pending'
+        && request.resource.data.name is string
+        && request.auth.uid in request.resource.data.managerUids;
+
+      allow update, delete: if canManageClub(clubId);
+    }
+
+    // ===============================================================
+    // club_posts
+    // ===============================================================
+
+    match /club_posts/{postId} {
+      allow read: if isAuth();
+
+      allow create: if isAuth()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.clubId is string
+        && canManageClub(request.resource.data.clubId);
+
+      allow update, delete: if isAuth() && (
+        isAdmin()
+        || (resource.data.uid == request.auth.uid && canManageClub(resource.data.clubId))
+        || canManageClub(resource.data.clubId)
+      );
+    }
+
+    // ===============================================================
+    // club_members
+    // ===============================================================
+
+    match /club_members/{docId} {
+      allow read: if isAuth();
+
+      allow create: if isAuth()
+        && request.resource.data.uid is string
+        && request.resource.data.clubId is string
+        && docId == request.resource.data.clubId + '_' + request.resource.data.uid
+        && canManageClub(request.resource.data.clubId);
+
+      allow update, delete: if isAuth()
+        && resource.data.clubId is string
+        && canManageClub(resource.data.clubId);
+    }
+
+    // ===============================================================
+    // club_applications
+    // ===============================================================
+
+    match /club_applications/{docId} {
+      allow read: if isAuth() && (
+        !exists(/databases/$(database)/documents/club_applications/$(docId))
+        || resource.data.uid == request.auth.uid
+        || canManageClub(resource.data.clubId)
+        || isAdmin()
+      );
+
+      allow create: if isAuth()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.clubId is string
+        && request.resource.data.status == 'pending'
+        && docId == request.resource.data.clubId + '_' + request.auth.uid;
+
+      allow update: if isAuth() && (
+        canManageClub(resource.data.clubId)
+        || isAdmin()
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // sessions (QR check-in)
+    // ===============================================================
+
+    match /sessions/{sessionId} {
+      allow read: if isAuth();
+
+      allow create: if isAuth()
+        && request.resource.data.clubId is string
+        && request.resource.data.eventId is string
+        && request.resource.data.active == true
+        && canManageClub(request.resource.data.clubId);
+
+      allow update: if isAuth()
+        && resource.data.clubId is string
+        && canManageClub(resource.data.clubId);
+
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Legacy collections — read-only (migration)
+    // ===============================================================
+
+    match /{collectionId}/{docId} {
+      allow read: if isAuth() && isLegacyCollection(collectionId);
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

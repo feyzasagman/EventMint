@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../services/club_repo.dart';
+import '../widgets/club_logo_avatar.dart';
 import 'club_detail_screen.dart';
 
 String _firestoreErrorText(Object? error) {
@@ -25,7 +27,7 @@ class ClubsListScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final body = StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('Kulüpler').snapshots(),
+      stream: ClubRepo.listClubs(),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           _logFirestoreError(snapshot.error!);
@@ -59,8 +61,9 @@ class ClubsListScreen extends StatelessWidget {
             final doc = docs[index];
             final data = doc.data();
             final title = _clubTitle(data, doc.id);
-            final description = _asString(data['aciklama']);
+            final description = _asString(data['bio'] ?? data['aciklama']);
             final tags = _pickTags(data);
+            final logoKey = _asString(data['logoKey'] ?? data['logo_key']);
 
             return Card(
               elevation: 0,
@@ -85,15 +88,30 @@ class ClubsListScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          ClubLogoAvatar(
+                            name: title,
+                            logoKey: logoKey.isEmpty ? null : logoKey,
+                            size: 56,
+                          ),
+                          const SizedBox(width: 12),
                           Expanded(
-                            child: Text(
-                              title,
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.bold),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    title,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                const Icon(Icons.chevron_right),
+                              ],
                             ),
                           ),
-                          const Icon(Icons.chevron_right),
                         ],
                       ),
                       if (description.isNotEmpty) ...[
@@ -142,16 +160,14 @@ class ClubsListScreen extends StatelessWidget {
 }
 
 String _clubTitle(Map<String, dynamic> data, String fallback) {
-  final title = _asString(
-    data['ad'] ?? data['Reklam'] ?? data['Ad'] ?? data['name'] ?? data['title'],
-  );
+  final title = _asString(data['name'] ?? data['title']);
   return title.isEmpty ? fallback : title;
 }
 
 String _asString(Object? value) => value?.toString().trim() ?? '';
 
 List<String> _pickTags(Map<String, dynamic> data) {
-  final value = data['Etiketler'] ?? data['etiketler'] ?? data['tags'];
+  final value = data['tags'] ?? data['etiketler'];
   if (value is List) {
     return value
         .map((tag) => tag.toString().trim())

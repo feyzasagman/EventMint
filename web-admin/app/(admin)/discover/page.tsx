@@ -2,95 +2,150 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, DocumentData, onSnapshot, orderBy, query, QuerySnapshot } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  type DocumentData,
+  type QuerySnapshot,
+} from "firebase/firestore";
 import { useRouter } from "next/navigation";
+import { ClubPostFeedCard } from "../../components/ClubPostFeedCard";
 import { EmptyState } from "../../components/EmptyState";
-import { EventCard } from "../../components/EventCard";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
+import { COL } from "../../../lib/collections";
+import {
+  formatFirestoreDate,
+  pickClubLogoKey,
+  pickClubName,
+  pickPostHashtags,
+  pickPostText,
+  pickString,
+} from "../../../lib/clubFields";
 import { auth, db } from "../../../lib/firebase";
 
-type EventItem = {
+type ClubOption = {
   id: string;
-  title?: string;
-  description?: string;
-  location?: string;
-  clubId?: string;
-  category?: string;
-  tags?: string[];
-  createdAt?: { seconds?: number };
+  name: string;
+  logoKey: string;
+  logoUrl: string;
 };
 
-const categories = ["Tümü", "STEM", "Sanat", "Spor", "Sosyal"];
-const tags = ["arduino", "robotik", "tiyatro", "konser", "turnuva", "bağış", "yazılım", "sergi"];
+type PostItem = {
+  id: string;
+  clubId: string;
+  clubName: string;
+  text: string;
+  hashtags: string[];
+  createdAt: Date | null;
+};
+
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
-function pickString(data: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = data[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  return undefined;
+function formatDateLabel(value: Date | null) {
+  if (!value) return "";
+  const day = value.getDate().toString().padStart(2, "0");
+  const month = (value.getMonth() + 1).toString().padStart(2, "0");
+  const hour = value.getHours().toString().padStart(2, "0");
+  const minute = value.getMinutes().toString().padStart(2, "0");
+  return `${day}.${month}.${value.getFullYear()} ${hour}:${minute}`;
 }
 
-function pickTags(data: Record<string, unknown>) {
-  for (const value of [data.tags, data.Etiketler, data.etiketler]) {
-    if (Array.isArray(value)) {
-      return value.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0);
-    }
-    if (typeof value === "string" && value.trim()) {
-      return value.split(",").map((tag) => tag.trim()).filter(Boolean);
-    }
-  }
-  return [];
+function mapPostDocs(snapshot: QuerySnapshot<DocumentData>): PostItem[] {
+  return snapshot.docs.map((postDoc) => {
+    const data = postDoc.data() as Record<string, unknown>;
+    const clubId = pickString(data, ["clubId", "kulupId", "kulupID"]);
+    const clubName = pickString(data, ["clubName", "name", "ad", "Reklam"]);
+    return {
+      id: postDoc.id,
+      clubId,
+      clubName,
+      text: pickPostText(data),
+      hashtags: pickPostHashtags(data),
+      createdAt: formatFirestoreDate(data.createdAt ?? data.olusturulduAt),
+    };
+  });
 }
 
 export default function DiscoverPage() {
   const router = useRouter();
-  const [events, setEvents] = useState<EventItem[]>([]);
+  const [posts, setPosts] = useState<PostItem[]>([]);
+  const [clubs, setClubs] = useState<ClubOption[]>([]);
+  const [clubMeta, setClubMeta] = useState<Record<string, ClubOption>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [indexNote, setIndexNote] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("Tümü");
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedClubId, setSelectedClubId] = useState("");
 
   useEffect(() => {
-    let stopEventsListener: (() => void) | null = null;
+    let stopPostsListener: (() => void) | null = null;
+    let stopClubsListener: (() => void) | null = null;
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (!user && !isDemoMode) {
         router.replace("/login");
         return;
       }
 
-      const handleSnapshot = (snapshot: QuerySnapshot<DocumentData>) => {
-        const items = snapshot.docs
-          .map((eventDoc) => {
-            const data = eventDoc.data() as Record<string, unknown>;
-            return {
-              id: eventDoc.id,
-              title: pickString(data, ["title", "Baslik", "Başlık", "baslik", "başlık"]),
-              description: pickString(data, ["description", "Tanim", "Tanım", "tanim", "tanım"]),
-              location: pickString(data, ["location", "Konum", "konum"]),
-              clubId: pickString(data, ["clubId", "Kulup", "Kulüp", "kulup", "kulüp", "club"]),
-              category: pickString(data, ["category", "Kategori", "kategori"]),
-              tags: pickTags(data),
-              createdAt: data.createdAt as EventItem["createdAt"],
-            };
-          })
-          .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
-        setEvents(items);
+      stopClubsListener = onSnapshot(
+        collection(db, COL.clubs),
+        (snapshot) => {
+          const items = snapshot.docs.map((clubDoc) => {
+            const data = clubDoc.data() as Record<string, unknown>;
+            const name = pickClubName(data, clubDoc.id);
+            const logoUrl = pickString(data, ["logoUrl", "logo"]);
+            const logoKey = pickClubLogoKey(data);
+            return { id: clubDoc.id, name, logoKey, logoUrl };
+          });
+          items.sort((a, b) => a.name.localeCompare(b.name, "tr"));
+          setClubs(items);
+          setClubMeta(Object.fromEntries(items.map((club) => [club.id, club])));
+        },
+        (clubError) => {
+          console.error("clubs snapshot error:", clubError);
+        }
+      );
+
+      const handlePostsSnapshot = (snapshot: QuerySnapshot<DocumentData>) => {
+        const items = mapPostDocs(snapshot).sort((a, b) => {
+          const aMs = a.createdAt?.getTime() ?? 0;
+          const bMs = b.createdAt?.getTime() ?? 0;
+          return bMs - aMs;
+        });
+        setPosts(items.slice(0, 30));
         setLoading(false);
+        setError(null);
       };
 
-      stopEventsListener = onSnapshot(
-        query(collection(db, "events"), orderBy("createdAt", "desc")),
-        handleSnapshot,
+      // Firestore: club_posts için createdAt alanında tek alanlı index yeterli.
+      // where + orderBy birlikte kullanılırsa composite index gerekir.
+      stopPostsListener = onSnapshot(
+        query(
+          collection(db, COL.clubPosts),
+          orderBy("createdAt", "desc"),
+          limit(30)
+        ),
+        handlePostsSnapshot,
         (snapshotError) => {
-          console.warn("Falling back to unordered discover query:", snapshotError);
-          stopEventsListener?.();
-          stopEventsListener = onSnapshot(
-            collection(db, "events"),
-            handleSnapshot,
+          console.warn(
+            "club_posts ordered query failed, falling back:",
+            snapshotError
+          );
+          setIndexNote(
+            "createdAt sıralaması için Firestore index gerekebilir; geçici olarak client-side sıralama kullanılıyor."
+          );
+          stopPostsListener?.();
+          stopPostsListener = onSnapshot(
+            collection(db, COL.clubPosts),
+            (fallbackSnapshot) => {
+              handlePostsSnapshot(fallbackSnapshot);
+            },
             (fallbackError) => {
               setError(fallbackError.message);
               setLoading(false);
@@ -102,106 +157,176 @@ export default function DiscoverPage() {
 
     return () => {
       unsubscribe();
-      stopEventsListener?.();
+      stopPostsListener?.();
+      stopClubsListener?.();
     };
   }, [router]);
 
-  const filteredEvents = useMemo(() => {
-    const queryText = searchQuery.trim().toLowerCase();
-    return events.filter((event) => {
-      const searchable = [
-        event.title,
-        event.clubId,
-        event.category,
-        event.location,
-        ...(event.tags ?? []),
-      ].filter(Boolean).join(" ").toLowerCase();
-      const matchesSearch = !queryText || searchable.includes(queryText);
-      const matchesCategory =
-        selectedCategory === "Tümü" || event.category?.toLowerCase() === selectedCategory.toLowerCase();
-      const matchesTag =
-        selectedTag == null || event.tags?.some((tag) => tag.toLowerCase() === selectedTag.toLowerCase());
-      return matchesSearch && matchesCategory && matchesTag;
+  useEffect(() => {
+    const missingClubIds = [
+      ...new Set(
+        posts
+          .filter((post) => post.clubId && !post.clubName && !clubMeta[post.clubId])
+          .map((post) => post.clubId)
+      ),
+    ];
+    if (missingClubIds.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      const fetched = await Promise.all(
+        missingClubIds.map(async (clubId) => {
+          const snapshot = await getDoc(doc(db, COL.clubs, clubId));
+          if (!snapshot.exists()) return null;
+          const data = snapshot.data() as Record<string, unknown>;
+          return {
+            id: clubId,
+            name: pickClubName(data, clubId),
+            logoKey: pickClubLogoKey(data),
+            logoUrl: pickString(data, ["logoUrl", "logo"]),
+          } satisfies ClubOption;
+        })
+      );
+
+      if (cancelled) return;
+      const valid = fetched.filter((club): club is ClubOption => club != null);
+      if (valid.length === 0) return;
+
+      setClubMeta((prev) => ({
+        ...prev,
+        ...Object.fromEntries(valid.map((club) => [club.id, club])),
+      }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [posts, clubMeta]);
+
+  const enrichedPosts = useMemo(() => {
+    return posts.map((post) => {
+      const meta = clubMeta[post.clubId];
+      return {
+        ...post,
+        clubName: post.clubName || meta?.name || post.clubId || "Kulüp",
+        logoKey: meta?.logoKey,
+        logoUrl: meta?.logoUrl,
+      };
     });
-  }, [events, searchQuery, selectedCategory, selectedTag]);
+  }, [posts, clubMeta]);
+
+  const filteredPosts = useMemo(() => {
+    const queryText = searchQuery.trim().toLowerCase();
+    return enrichedPosts.filter((post) => {
+      const matchesClub =
+        !selectedClubId || post.clubId === selectedClubId;
+      const matchesSearch =
+        !queryText ||
+        post.text.toLowerCase().includes(queryText) ||
+        post.clubName.toLowerCase().includes(queryText) ||
+        post.hashtags.some((tag) => tag.toLowerCase().includes(queryText));
+      return matchesClub && matchesSearch;
+    });
+  }, [enrichedPosts, searchQuery, selectedClubId]);
 
   const clearFilters = () => {
     setSearchQuery("");
-    setSelectedCategory("Tümü");
-    setSelectedTag(null);
+    setSelectedClubId("");
   };
 
   return (
     <>
-      <Card className="mb-6 p-4">
+      <div className="mb-8">
+        <p className="text-xs font-medium uppercase tracking-wide text-brand">
+          Feed
+        </p>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight">Keşfet</h1>
+        <p className="mt-2 max-w-2xl text-sm text-text2">
+          Kulüp paylaşımlarını takip et, metin içinde ara ve kulübe göre filtrele.
+        </p>
+      </div>
+
+      <Card className="mb-6 space-y-4 p-4">
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="Etkinlik, kulüp, kategori, konum veya etiket ara"
+          placeholder="Paylaşım metninde ara..."
           className="ui-input"
         />
-        <div className="mt-4 flex flex-wrap gap-2">
-          {categories.map((category) => (
-            <Button
-              key={category}
-              type="button"
-              onClick={() => setSelectedCategory(category)}
-              variant={selectedCategory === category ? "brand" : "secondary"}
-              className="min-h-8 rounded-full px-3 text-sm"
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm text-text2">
+            Kulüp filtresi
+            <select
+              value={selectedClubId}
+              onChange={(event) => setSelectedClubId(event.target.value)}
+              className="ui-input"
             >
-              {category}
-            </Button>
-          ))}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {tags.map((tag) => (
-            <Button
-              key={tag}
-              type="button"
-              onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
-              variant={selectedTag === tag ? "brand" : "secondary"}
-              className="min-h-8 rounded-full px-3 text-sm"
-            >
-              {tag}
-            </Button>
-          ))}
-          {(searchQuery || selectedCategory !== "Tümü" || selectedTag) && (
+              <option value="">Tüm kulüpler</option>
+              {clubs.map((club) => (
+                <option key={club.id} value={club.id}>
+                  {club.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {(searchQuery || selectedClubId) && (
             <Button
               type="button"
               onClick={clearFilters}
               variant="secondary"
-              className="min-h-8 rounded-full px-3 text-sm"
+              className="sm:self-end"
             >
               Filtreyi temizle
             </Button>
           )}
         </div>
+        {indexNote && (
+          <p className="text-xs text-text2">{indexNote}</p>
+        )}
       </Card>
 
-      {loading && <div className="h-48 animate-pulse rounded-3xl bg-zinc-100 dark:bg-zinc-900" />}
-      {error && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">{error}</p>}
+      {loading && (
+        <div className="h-48 animate-pulse rounded-[16px] bg-surface2" />
+      )}
 
-      {!loading && !error && filteredEvents.length === 0 && (
+      {error && (
+        <p className="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+          {error}
+        </p>
+      )}
+
+      {!loading && !error && filteredPosts.length === 0 && (
         <EmptyState
           icon="🔎"
-          title={events.length === 0 ? "Etkinlik bulunamadı" : "Sonuç bulunamadı"}
-          subtitle={events.length === 0 ? "Keşfedilecek etkinlikler burada görünecek." : "Arama veya filtrelerini değiştir."}
-          action={events.length > 0 ? (
-            <Button
-              type="button"
-              onClick={clearFilters}
-            >
-              Filtreyi temizle
-            </Button>
-          ) : null}
+          title={posts.length === 0 ? "Henüz paylaşım yok" : "Sonuç bulunamadı"}
+          subtitle={
+            posts.length === 0
+              ? "Kulüp paylaşımları burada görünecek."
+              : "Arama veya kulüp filtresini değiştir."
+          }
+          action={
+            posts.length > 0 ? (
+              <Button type="button" onClick={clearFilters}>
+                Filtreyi temizle
+              </Button>
+            ) : null
+          }
         />
       )}
 
-      {filteredEvents.length > 0 && (
-        <ul className="grid gap-5 md:grid-cols-2">
-          {filteredEvents.map((event) => (
-            <li key={event.id}>
-              <EventCard {...event} />
+      {filteredPosts.length > 0 && (
+        <ul className="space-y-4">
+          {filteredPosts.map((post) => (
+            <li key={post.id}>
+              <ClubPostFeedCard
+                clubId={post.clubId}
+                clubName={post.clubName}
+                logoKey={post.logoKey}
+                logoUrl={post.logoUrl}
+                text={post.text}
+                hashtags={post.hashtags}
+                createdAtLabel={formatDateLabel(post.createdAt)}
+              />
             </li>
           ))}
         </ul>

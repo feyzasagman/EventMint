@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "club_applications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clubId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

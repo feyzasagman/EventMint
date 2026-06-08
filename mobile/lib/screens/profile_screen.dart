@@ -1,14 +1,25 @@
+import 'dart:ui';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../shared/badges.dart';
+import '../theme/app_theme.dart';
+import '../services/badge_service.dart';
+import '../services/club_repo.dart';
 import '../services/user_record_service.dart';
 import '../widgets/app_card.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/primary_button.dart';
 import '../widgets/secondary_button.dart';
 import '../widgets/tag_chip.dart';
 import 'club_detail_screen.dart';
 
 import 'create_club_screen.dart';
+import 'club_manage_screen.dart';
+import 'admin_events_screen.dart';
+import 'admin_users_screen.dart';
+import 'admin_managers_screen.dart';
 
 final Map<String, String> _eventTitleCache = <String, String>{};
 
@@ -41,8 +52,38 @@ class ProfileScreen extends StatelessWidget {
       return showScaffold ? const Scaffold(body: body) : body;
     }
 
-    final body = FutureBuilder<Map<String, dynamic>?>(
-      future: getUserRecord(uid),
+    final body = _ProfileDataView(uid: uid);
+    return showScaffold ? Scaffold(body: body) : body;
+  }
+}
+
+class _ProfileDataView extends StatefulWidget {
+  const _ProfileDataView({required this.uid});
+
+  final String uid;
+
+  @override
+  State<_ProfileDataView> createState() => _ProfileDataViewState();
+}
+
+class _ProfileDataViewState extends State<_ProfileDataView> {
+  late final Future<Map<String, dynamic>?> _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _profileFuture = _loadProfile(widget.uid);
+  }
+
+  Future<Map<String, dynamic>?> _loadProfile(String uid) async {
+    await syncCheckinBadges(uid);
+    return getUserRecord(uid);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: _profileFuture,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           _logFirestoreError(snapshot.error!);
@@ -66,30 +107,33 @@ class ProfileScreen extends StatelessWidget {
           data['e-posta'] ?? data['email'] ?? data['Email'] ?? '',
         );
         final role = getRole(data);
+        final clubId = getUserClubId(data);
         final points = _asNumber(
           data['Toplam puanlar'] ?? data['pointsTotal'] ?? 0,
         );
-        final badges = _parseBadges(_pickBadgeList(data));
+        final badges = _parseBadges(pickBadgeList(data));
 
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            _InfoTile(label: 'E-posta', value: email.isEmpty ? '-' : email),
-            _InfoTile(label: 'Rol', value: role.isEmpty ? '-' : role),
-            _InfoTile(label: 'Toplam puanlar', value: points.toString()),
-            const SizedBox(height: 16),
-            Text(
-              'Rozetler',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontSize: 17,
-                fontWeight: FontWeight.w600,
+            const Center(child: AppLogo()),
+            const SizedBox(height: 8),
+            Center(
+              child: Text(
+                'EventMint',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            if (badges.isEmpty)
-              const Text('Henüz rozet yok.')
-            else
-              ...badges.map((badge) => _BadgeCard(badge: badge)),
+            const SizedBox(height: 20),
+            _InfoTile(label: 'E-posta', value: email.isEmpty ? '-' : email),
+            _InfoTile(label: 'Rol', value: roleLabelTr(role)),
+            if (isStaffRole(role) && clubId.isNotEmpty)
+              _InfoTile(label: 'Kulüp', value: clubId),
+            _PointsProgressBar(points: points),
+            const SizedBox(height: 16),
+            _BadgeShowcase(badges: badges),
             const SizedBox(height: 24),
             Text(
               'Üye olduğum kulüpler',
@@ -100,9 +144,8 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('KulüpÜyeleri')
-                  .where('UID', isEqualTo: uid)
+              stream: ClubRepo.col(ClubRepo.clubMembers)
+                  .where('uid', isEqualTo: widget.uid)
                   .snapshots(),
               builder: (context, membershipSnapshot) {
                 if (membershipSnapshot.hasError) {
@@ -117,7 +160,7 @@ class ProfileScreen extends StatelessWidget {
 
                 final membershipDocs = membershipSnapshot.data!.docs;
                 final clubIds = membershipDocs
-                    .map((doc) => _asString(doc.data()['kulupId']))
+                    .map((doc) => _asString(doc.data()['clubId']))
                     .where((id) => id.isNotEmpty)
                     .toSet()
                     .toList();
@@ -175,12 +218,8 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection("Check-in")
-                  .where(
-                    "UID",
-                    isEqualTo: FirebaseAuth.instance.currentUser!.uid,
-                  )
+              stream: ClubRepo.col(ClubRepo.checkins)
+                  .where('uid', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
                   .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
@@ -216,7 +255,7 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-              future: _loadRsvpDocs(uid),
+              future: _loadRsvpDocs(widget.uid),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   _logFirestoreError(snapshot.error!);
@@ -235,7 +274,7 @@ class ProfileScreen extends StatelessWidget {
                   children: docs.map((d) {
                     final data = d.data();
                     return _RsvpCard(
-                      eventId: _pickRsvpEventId(data, d.id, uid),
+                      eventId: _pickRsvpEventId(data, d.id, widget.uid),
                       createdAt: data["createdAt"],
                     );
                   }).toList(),
@@ -243,6 +282,60 @@ class ProfileScreen extends StatelessWidget {
               },
             ),
             const SizedBox(height: 24),
+            if (isStaffRole(role)) ...[
+              Text(
+                'Yönetim',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              PrimaryButton(
+                label: 'Kulübüm / Üyelik Yönetimi',
+                icon: Icons.groups_outlined,
+                onPressed: () => _openClubManage(context, role: role, clubId: clubId),
+              ),
+              const SizedBox(height: 12),
+              SecondaryButton(
+                label: 'Etkinlik Yönetimi',
+                icon: Icons.event_note_outlined,
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => AdminEventsScreen(role: role, clubId: clubId),
+                    ),
+                  );
+                },
+              ),
+              if (isAdminRole(role)) ...[
+                const SizedBox(height: 12),
+                SecondaryButton(
+                  label: 'Kullanıcılar',
+                  icon: Icons.people_outline,
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const AdminUsersScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                SecondaryButton(
+                  label: 'Yöneticiler',
+                  icon: Icons.admin_panel_settings_outlined,
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const AdminManagersScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 24),
+            ],
             if (_canCreateClub(role)) ...[
               PrimaryButton(
                 label: 'Kulüp Oluştur',
@@ -271,17 +364,64 @@ class ProfileScreen extends StatelessWidget {
         );
       },
     );
-    if (!showScaffold) return body;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Profil')),
-      body: body,
-    );
   }
 }
 
 bool _canCreateClub(String role) {
-  final normalizedRole = role.toLowerCase().trim();
-  return normalizedRole == 'kulüp_yöneticisi';
+  return isStaffRole(role);
+}
+
+Future<void> _openClubManage(
+  BuildContext context, {
+  required String role,
+  required String clubId,
+}) async {
+  var targetClubId = clubId;
+  if (targetClubId.isEmpty && isAdminRole(role)) {
+    final snapshot = await ClubRepo.col(ClubRepo.clubs).get();
+    if (!context.mounted) return;
+    if (snapshot.docs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Önce bir kulüp oluşturun.')),
+      );
+      return;
+    }
+
+    targetClubId = await showDialog<String>(
+          context: context,
+          builder: (context) => SimpleDialog(
+            title: const Text('Kulüp seç'),
+            children: snapshot.docs.map((doc) {
+              final data = doc.data();
+              final name = _asString(data['name'] ?? data['ad'] ?? doc.id);
+              return SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, doc.id),
+                child: Text(name),
+              );
+            }).toList(),
+          ),
+        ) ??
+        '';
+  }
+
+  if (targetClubId.isEmpty) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kulüp ataması gerekli.')),
+      );
+    }
+    return;
+  }
+
+  if (!context.mounted) return;
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ClubManageScreen(
+        clubId: targetClubId,
+        initialTabIndex: 1,
+      ),
+    ),
+  );
 }
 
 String _asString(Object? value) {
@@ -307,16 +447,13 @@ Future<List<_MemberClubInfo>> _loadMemberClubs(List<String> clubIds) async {
   final clubs = <_MemberClubInfo>[];
   for (final clubId in clubIds) {
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('Kulüpler')
-          .doc(clubId)
-          .get();
+      final snapshot = await ClubRepo.getClub(clubId);
       final data = snapshot.data() ?? <String, dynamic>{};
       clubs.add(
         _MemberClubInfo(
           clubId: clubId,
-          name: _asString(data['ad'] ?? data['Reklam'] ?? clubId),
-          description: _asString(data['aciklama']),
+          name: _asString(data['name'] ?? data['ad'] ?? clubId),
+          description: _asString(data['bio'] ?? data['aciklama']),
           tags: _pickClubTags(data),
         ),
       );
@@ -370,14 +507,6 @@ List<Map<String, dynamic>> _parseBadges(Object? value) {
     }
   }
   return badges;
-}
-
-Object? _pickBadgeList(Map<String, dynamic> data) {
-  return data['Rozetler'] ??
-      data['rozetler'] ??
-      data['badges'] ??
-      data['Badges'] ??
-      [];
 }
 
 String _formatEarnedAt(Object? value) {
@@ -438,26 +567,20 @@ String? _cachedEventTitle(String eventId) {
 
 Future<DocumentSnapshot<Map<String, dynamic>>>? _eventFuture(String eventId) {
   if (eventId.isEmpty || _eventTitleCache.containsKey(eventId)) return null;
-  return FirebaseFirestore.instance
-      .collection('Etkinlikler')
-      .doc(eventId)
-      .get();
+  return ClubRepo.col(ClubRepo.events).doc(eventId).get();
 }
 
 Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _loadRsvpDocs(
   String uid,
 ) async {
   try {
-    final rsvpCollection = FirebaseFirestore.instance.collection("RSVP'ler");
-    final uidSnapshot = await rsvpCollection.where("UID", isEqualTo: uid).get();
+    final rsvpCollection = ClubRepo.col(ClubRepo.rsvps);
+    final uidSnapshot = await rsvpCollection.where('uid', isEqualTo: uid).get();
     if (uidSnapshot.docs.isNotEmpty) {
       return uidSnapshot.docs;
     }
 
-    final lowercaseUidSnapshot = await rsvpCollection
-        .where("uid", isEqualTo: uid)
-        .get();
-    return lowercaseUidSnapshot.docs;
+    return <QueryDocumentSnapshot<Map<String, dynamic>>>[];
   } on FirebaseException catch (e, st) {
     _logFirestoreError(e, st);
     return <QueryDocumentSnapshot<Map<String, dynamic>>>[];
@@ -468,13 +591,7 @@ Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _loadRsvpDocs(
 }
 
 String _pickRsvpEventId(Map<String, dynamic> data, String docId, String uid) {
-  final eventId = _asString(
-    data['eventId'] ??
-        data['EtkinlikId'] ??
-        data['EtkinlikID'] ??
-        data['etkinlikId'] ??
-        data['etkinlikID'],
-  );
+  final eventId = _asString(data['eventId']);
   if (eventId.isNotEmpty) return eventId;
 
   for (final separator in <String>['_', '|', ':']) {
@@ -675,45 +792,248 @@ class _RsvpCard extends StatelessWidget {
   }
 }
 
-class _BadgeCard extends StatelessWidget {
-  const _BadgeCard({required this.badge});
+class _PointsProgressBar extends StatelessWidget {
+  const _PointsProgressBar({required this.points});
 
-  final Map<String, dynamic> badge;
+  final num points;
 
   @override
   Widget build(BuildContext context) {
-    final id = badge['id']?.toString() ?? '-';
-    final earnedAt = _formatEarnedAt(badge['earnedAt']);
+    final safe = points < 0 ? 0 : points.toDouble();
+    final percent = pointsProgressPercent(points);
 
-    return AppCard(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          const Icon(Icons.emoji_events),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  id,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Puan ilerlemesi',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            Text(
+              '${safe.toInt()} / $pointsGoal',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            height: 10,
+            decoration: BoxDecoration(
+              color: AppTheme.surface2,
+              border: Border.all(color: AppTheme.border),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: FractionallySizedBox(
+              alignment: Alignment.centerLeft,
+              widthFactor: percent / 100,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppTheme.brand, AppTheme.brand.withValues(alpha: 0.7)],
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Kazanıldı: $earnedAt',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-        ],
+        ),
+      ],
+    );
+  }
+}
+
+class _BadgeShowcase extends StatelessWidget {
+  const _BadgeShowcase({required this.badges});
+
+  final List<Map<String, dynamic>> badges;
+
+  @override
+  Widget build(BuildContext context) {
+    final sections = splitBadgeSections(badges);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Kazanılan Rozetler',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (sections.earned.isEmpty)
+          Text(
+            'Henüz rozet kazanılmadı.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppTheme.textSecondary,
+            ),
+          )
+        else
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: sections.earned.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              mainAxisExtent: 210,
+            ),
+            itemBuilder: (context, index) =>
+                _BadgeCard(badge: sections.earned[index]),
+          ),
+        const SizedBox(height: 20),
+        Text(
+          'Kilitli Rozetler',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: sections.locked.length,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            mainAxisExtent: 210,
+          ),
+          itemBuilder: (context, index) => _BadgeCard(
+            definition: sections.locked[index],
+            locked: true,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BadgeCard extends StatelessWidget {
+  const _BadgeCard({
+    this.badge,
+    this.definition,
+    this.locked = false,
+  }) : assert(badge != null || definition != null);
+
+  final Map<String, dynamic>? badge;
+  final BadgeDefinition? definition;
+  final bool locked;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = badge?['id']?.toString() ?? definition?.id.value ?? '-';
+    final earnedAt = _formatEarnedAt(badge?['earnedAt']);
+    final def = definition ?? badgeDefinitionFor(id);
+    final title = def?.title ?? id;
+    final subtitle = def?.subtitle ?? 'Kazanılmış rozet';
+    final assetPath = def?.assetPath;
+
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Opacity(
+        opacity: locked ? 0.72 : 1,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (assetPath != null)
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  if (locked)
+                    ImageFiltered(
+                      imageFilter: ImageFilter.blur(sigmaX: 2.5, sigmaY: 2.5),
+                      child: Opacity(
+                        opacity: 0.4,
+                        child: Image.asset(
+                          assetPath,
+                          width: 80,
+                          height: 80,
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    )
+                  else
+                    Image.asset(
+                      assetPath,
+                      width: 80,
+                      height: 80,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) => Icon(
+                        Icons.emoji_events_outlined,
+                        size: 44,
+                        color: AppTheme.brand,
+                      ),
+                    ),
+                  if (locked)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.background.withValues(alpha: 0.75),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: Text(
+                        'Kilitli',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: AppTheme.textSecondary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                ],
+              )
+            else
+              Icon(Icons.emoji_events_outlined, size: 48, color: AppTheme.brand),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: locked ? AppTheme.textSecondary : null,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontSize: 11,
+                height: 1.25,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              locked ? 'Henüz kazanılmadı' : 'Kazanıldı: $earnedAt',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontSize: 10,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

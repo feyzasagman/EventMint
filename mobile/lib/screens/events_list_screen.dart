@@ -4,14 +4,13 @@ import 'package:flutter/material.dart';
 
 import 'event_detail_screen.dart';
 import 'profile_screen.dart';
+import '../services/badge_service.dart';
+import '../services/club_repo.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/event_card.dart';
 import '../widgets/primary_button.dart';
 import '../widgets/secondary_button.dart';
 import '../widgets/tag_chip.dart';
-
-const String _primaryEventsCollectionName = 'Etkinlikler';
-const String _fallbackEventsCollectionName = 'events';
 
 String _firestoreErrorText(Object? error) {
   if (error is FirebaseException) {
@@ -58,38 +57,9 @@ List<String> pickStringList(Map data, List<String> keys) {
 }
 
 Future<_RsvpLookupResult> _findRsvp(String eventId, String uid) async {
-  final rsvpCollection = FirebaseFirestore.instance.collection("RSVP'ler");
-  final docRef = rsvpCollection.doc('${eventId}_$uid');
+  final docRef = ClubRepo.rsvpDoc(eventId, uid);
   final docSnapshot = await docRef.get();
-  if (docSnapshot.exists) {
-    return _RsvpLookupResult(ref: docRef, exists: true);
-  }
-
-  final uidSnapshot = await rsvpCollection
-      .where('eventId', isEqualTo: eventId)
-      .where('UID', isEqualTo: uid)
-      .limit(1)
-      .get();
-  if (uidSnapshot.docs.isNotEmpty) {
-    return _RsvpLookupResult(
-      ref: uidSnapshot.docs.first.reference,
-      exists: true,
-    );
-  }
-
-  final lowercaseUidSnapshot = await rsvpCollection
-      .where('eventId', isEqualTo: eventId)
-      .where('uid', isEqualTo: uid)
-      .limit(1)
-      .get();
-  if (lowercaseUidSnapshot.docs.isNotEmpty) {
-    return _RsvpLookupResult(
-      ref: lowercaseUidSnapshot.docs.first.reference,
-      exists: true,
-    );
-  }
-
-  return _RsvpLookupResult(ref: docRef, exists: false);
+  return _RsvpLookupResult(ref: docRef, exists: docSnapshot.exists);
 }
 
 class _RsvpLookupResult {
@@ -109,7 +79,6 @@ class EventsListScreen extends StatefulWidget {
 }
 
 class _EventsListScreenState extends State<EventsListScreen> {
-  late final Future<String> _eventsCollectionFuture = _pickEventsCollection();
   final TextEditingController _searchController = TextEditingController();
   bool _isSearching = false;
   String _searchQuery = '';
@@ -120,28 +89,9 @@ class _EventsListScreenState extends State<EventsListScreen> {
     super.dispose();
   }
 
-  Future<String> _pickEventsCollection() async {
-    try {
-      final primarySnapshot = await FirebaseFirestore.instance
-          .collection(_primaryEventsCollectionName)
-          .get();
-      if (primarySnapshot.docs.isNotEmpty) {
-        return _primaryEventsCollectionName;
-      }
-      return _fallbackEventsCollectionName;
-    } on FirebaseException catch (e, st) {
-      _logFirestoreError(e, st);
-      return _fallbackEventsCollectionName;
-    } catch (e, st) {
-      _logFirestoreError(e, st);
-      return _fallbackEventsCollectionName;
-    }
-  }
-
-  Stream<QuerySnapshot<Map<String, dynamic>>> _eventsStream(
-    String collectionName,
-  ) {
-    return FirebaseFirestore.instance.collection(collectionName).snapshots();
+  Stream<QuerySnapshot<Map<String, dynamic>>> _eventsStream() {
+    ClubRepo.logCollection(ClubRepo.events, op: 'list');
+    return ClubRepo.col(ClubRepo.events).snapshots();
   }
 
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _filterDocs(
@@ -201,138 +151,115 @@ class _EventsListScreenState extends State<EventsListScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
-          child: FutureBuilder<String>(
-            future: _eventsCollectionFuture,
-            builder: (context, collectionSnapshot) {
-              if (collectionSnapshot.hasError) {
-                _logFirestoreError(collectionSnapshot.error!);
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _eventsStream(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                _logFirestoreError(snapshot.error!);
                 return Center(
                   child: Text(
-                    "Hata: ${_firestoreErrorText(collectionSnapshot.error)}",
+                    "Hata: ${_firestoreErrorText(snapshot.error)}",
                   ),
                 );
               }
 
-              if (!collectionSnapshot.hasData) {
+              if (!snapshot.hasData) {
                 return const Center(child: Text("Yükleniyor..."));
               }
 
-              final collectionName = collectionSnapshot.data!;
-              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: _eventsStream(collectionName),
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    _logFirestoreError(snapshot.error!);
-                    return Center(
-                      child: Text(
-                        "Hata: ${_firestoreErrorText(snapshot.error)}",
+              final docs = snapshot.data!.docs;
+              final filteredDocs = _filterDocs(docs);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (docs.isEmpty)
+                    const Expanded(
+                      child: EmptyState(
+                        icon: Icons.event_busy,
+                        title: 'Etkinlik bulunamadı',
+                        subtitle:
+                            'Yeni etkinlikler eklendiğinde burada görünecek.',
                       ),
-                    );
-                  }
+                    )
+                  else if (filteredDocs.isEmpty)
+                    const Expanded(
+                      child: EmptyState(
+                        icon: Icons.search_off,
+                        title: 'Sonuç bulunamadı',
+                        subtitle: 'Aramanı değiştir',
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: filteredDocs.length,
+                        separatorBuilder: (context, index) =>
+                            const SizedBox(height: 8),
+                        padding: const EdgeInsets.all(12),
+                        itemBuilder: (context, index) {
+                          final data = filteredDocs[index].data();
+                          final eventId = filteredDocs[index].id;
 
-                  if (!snapshot.hasData) {
-                    return const Center(child: Text("Yükleniyor..."));
-                  }
+                          final titleRaw = pickString(data, const [
+                            'title',
+                            'Baslik',
+                            'Başlık',
+                            'başlık',
+                            'baslik',
+                          ]);
+                          final title = titleRaw.isEmpty
+                              ? '(Başlık yok)'
+                              : titleRaw;
+                          final clubIdRaw = pickString(data, const [
+                            'clubId',
+                            'Kulup',
+                            'kulup',
+                          ]);
+                          final clubId = clubIdRaw.isEmpty ? '-' : clubIdRaw;
+                          final categoryRaw = pickString(data, const [
+                            'category',
+                            'Kategori',
+                            'kategori',
+                          ]);
+                          final category =
+                              categoryRaw.isEmpty ? '-' : categoryRaw;
+                          final locationRaw = pickString(data, const [
+                            'location',
+                            'Konum',
+                            'konum',
+                          ]);
+                          final location =
+                              locationRaw.isEmpty ? '-' : locationRaw;
+                          final tags = pickStringList(data, const [
+                            'tags',
+                            'Etiketler',
+                            'etiketler',
+                          ]);
 
-                  final docs = snapshot.data!.docs;
-                  final filteredDocs = _filterDocs(docs);
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (docs.isEmpty)
-                        const Expanded(
-                          child: EmptyState(
-                            icon: Icons.event_busy,
-                            title: 'Etkinlik bulunamadı',
-                            subtitle:
-                                'Yeni etkinlikler eklendiğinde burada görünecek.',
-                          ),
-                        )
-                      else if (filteredDocs.isEmpty)
-                        const Expanded(
-                          child: EmptyState(
-                            icon: Icons.search_off,
-                            title: 'Sonuç bulunamadı',
-                            subtitle: 'Aramanı değiştir',
-                          ),
-                        )
-                      else
-                        Expanded(
-                          child: ListView.separated(
-                            itemCount: filteredDocs.length,
-                            separatorBuilder: (context, index) =>
-                                const SizedBox(height: 8),
-                            padding: const EdgeInsets.all(12),
-                            itemBuilder: (context, index) {
-                              final data = filteredDocs[index].data();
-                              final eventId = filteredDocs[index].id;
-
-                              final titleRaw = pickString(data, const [
-                                'title',
-                                'Baslik',
-                                'Başlık',
-                                'başlık',
-                                'baslik',
-                              ]);
-                              final title = titleRaw.isEmpty
-                                  ? '(Başlık yok)'
-                                  : titleRaw;
-                              final clubIdRaw = pickString(data, const [
-                                'clubId',
-                                'Kulup',
-                                'kulup',
-                              ]);
-                              final clubId = clubIdRaw.isEmpty
-                                  ? '-'
-                                  : clubIdRaw;
-                              final categoryRaw = pickString(data, const [
-                                'category',
-                                'Kategori',
-                                'kategori',
-                              ]);
-                              final category = categoryRaw.isEmpty
-                                  ? '-'
-                                  : categoryRaw;
-                              final locationRaw = pickString(data, const [
-                                'location',
-                                'Konum',
-                                'konum',
-                              ]);
-                              final location = locationRaw.isEmpty
-                                  ? '-'
-                                  : locationRaw;
-                              final tags = pickStringList(data, const [
-                                'tags',
-                                'Etiketler',
-                                'etiketler',
-                              ]);
-
-                              return EventCard(
-                                title: title,
-                                clubId: clubId,
-                                category: category,
-                                location: location,
-                                tags: tags,
-                                onTap: () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => EventDetailScreen(
-                                        eventId: eventId,
-                                        data: data,
-                                      ),
-                                    ),
-                                  );
-                                },
-                                trailingActions: _RsvpStatusActions(
-                                  eventId: eventId,
+                          return EventCard(
+                            title: title,
+                            clubId: clubId,
+                            category: category,
+                            location: location,
+                            tags: tags,
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => EventDetailScreen(
+                                    eventId: eventId,
+                                    data: data,
+                                  ),
                                 ),
                               );
                             },
-                          ),
-                        ),
-                    ],
-                  );
-                },
+                            trailingActions: _RsvpStatusActions(
+                              eventId: eventId,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
               );
             },
           ),
@@ -422,16 +349,26 @@ class _RsvpStatusActionsState extends State<_RsvpStatusActions> {
       final result = await _rsvpFuture;
       await result.ref.set({
         'eventId': widget.eventId,
-        'UID': _uid,
         'uid': _uid,
         'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
+
+      final newBadges = await awardFirstRsvpBadge(_uid);
 
       if (!mounted) return;
       setState(() {
         _isSaving = false;
         _refreshRsvp();
       });
+      if (newBadges.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Katılım kaydedildi • Yeni rozet: ${newBadges.join(', ')}',
+            ),
+          ),
+        );
+      }
     } on FirebaseException catch (error, st) {
       _logFirestoreError(error, st);
       if (!mounted) return;

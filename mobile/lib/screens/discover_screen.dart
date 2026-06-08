@@ -5,15 +5,16 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'event_detail_screen.dart';
+import '../services/badge_service.dart';
+import '../services/club_repo.dart';
 import '../widgets/app_card.dart';
+import '../widgets/club_logo_avatar.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/event_card.dart';
 import '../widgets/primary_button.dart';
 import '../widgets/secondary_button.dart';
 import '../widgets/tag_chip.dart';
 
-const String _primaryDiscoverCollectionName = 'events';
-const String _fallbackDiscoverCollectionName = 'Etkinlikler';
 const List<String> _categories = ['Tümü', 'STEM', 'Sanat', 'Spor', 'Sosyal'];
 const List<String> _popularTags = [
   'arduino',
@@ -92,38 +93,9 @@ String _formatDate(DateTime value) {
 }
 
 Future<_RsvpLookupResult> _findRsvp(String eventId, String uid) async {
-  final rsvpCollection = FirebaseFirestore.instance.collection("RSVP'ler");
-  final docRef = rsvpCollection.doc('${eventId}_$uid');
+  final docRef = ClubRepo.rsvpDoc(eventId, uid);
   final docSnapshot = await docRef.get();
-  if (docSnapshot.exists) {
-    return _RsvpLookupResult(ref: docRef, exists: true);
-  }
-
-  final uidSnapshot = await rsvpCollection
-      .where('eventId', isEqualTo: eventId)
-      .where('UID', isEqualTo: uid)
-      .limit(1)
-      .get();
-  if (uidSnapshot.docs.isNotEmpty) {
-    return _RsvpLookupResult(
-      ref: uidSnapshot.docs.first.reference,
-      exists: true,
-    );
-  }
-
-  final lowercaseUidSnapshot = await rsvpCollection
-      .where('eventId', isEqualTo: eventId)
-      .where('uid', isEqualTo: uid)
-      .limit(1)
-      .get();
-  if (lowercaseUidSnapshot.docs.isNotEmpty) {
-    return _RsvpLookupResult(
-      ref: lowercaseUidSnapshot.docs.first.reference,
-      exists: true,
-    );
-  }
-
-  return _RsvpLookupResult(ref: docRef, exists: false);
+  return _RsvpLookupResult(ref: docRef, exists: docSnapshot.exists);
 }
 
 class _RsvpLookupResult {
@@ -144,7 +116,6 @@ class DiscoverScreen extends StatefulWidget {
 
 class _DiscoverScreenState extends State<DiscoverScreen> {
   final TextEditingController _searchController = TextEditingController();
-  late final Future<String> _collectionFuture = _pickEventsCollection();
   Timer? _searchDebounce;
   String _selectedCategory = 'Tümü';
   String? _selectedTag;
@@ -181,29 +152,16 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     });
   }
 
-  Future<String> _pickEventsCollection() async {
-    final primarySnapshot = await FirebaseFirestore.instance
-        .collection(_primaryDiscoverCollectionName)
-        .get();
-    if (primarySnapshot.docs.isNotEmpty) {
-      return _primaryDiscoverCollectionName;
-    }
-    return _fallbackDiscoverCollectionName;
-  }
-
-  Stream<QuerySnapshot<Map<String, dynamic>>> _eventsStream(
-    String collectionName,
-  ) {
-    return FirebaseFirestore.instance
-        .collection(collectionName)
+  Stream<QuerySnapshot<Map<String, dynamic>>> _eventsStream() {
+    ClubRepo.logCollection(ClubRepo.events, op: 'listPublished');
+    return ClubRepo.col(ClubRepo.events)
         .where('status', isEqualTo: 'published')
         .snapshots();
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _postsStream() {
-    return FirebaseFirestore.instance
-        .collection('KulüpPaylasimlari')
-        .snapshots();
+    ClubRepo.logCollection(ClubRepo.clubPosts, op: 'list');
+    return ClubRepo.col(ClubRepo.clubPosts).snapshots();
   }
 
   List<_DiscoverFeedItem> _mergeAndFilterFeed({
@@ -277,6 +235,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
       final data = item.payload;
       final clubId = _pickString(data, const ['kulupId', 'kulupID', 'clubId']);
+      final clubName = _pickString(data, const [
+        'clubName',
+        'Reklam',
+        'ad',
+        'name',
+      ]);
       final text = _pickString(data, const [
         'metin',
         'text',
@@ -284,6 +248,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         'içerik',
       ]);
       final tags = _pickStringList(data, const [
+        'hashtags',
         'tags',
         'Etiketler',
         'etiketler',
@@ -292,6 +257,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       final matchesSearch =
           query.isEmpty ||
           _containsIgnoreCase(clubId, query) ||
+          _containsIgnoreCase(clubName, query) ||
           _containsIgnoreCase(text, query) ||
           tags.any((tag) => _containsIgnoreCase(tag, query));
       final matchesCategory = _selectedCategory == 'Tümü';
@@ -424,33 +390,20 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           ),
         const SizedBox(height: 8),
         Expanded(
-          child: FutureBuilder<String>(
-            future: _collectionFuture,
-            builder: (context, collectionSnapshot) {
-              if (collectionSnapshot.hasError) {
-                debugPrint('DISCOVER ERROR: ${collectionSnapshot.error}');
-                return Center(child: Text('Hata: ${collectionSnapshot.error}'));
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _eventsStream(),
+            builder: (context, eventsSnapshot) {
+              if (eventsSnapshot.hasError) {
+                debugPrint('DISCOVER ERROR: ${eventsSnapshot.error}');
+                return Center(child: Text('Hata: ${eventsSnapshot.error}'));
               }
-
-              if (!collectionSnapshot.hasData) {
+              if (!eventsSnapshot.hasData) {
                 return const Center(child: Text('Yükleniyor...'));
               }
 
-              final collectionName = collectionSnapshot.data!;
               return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: _eventsStream(collectionName),
-                builder: (context, eventsSnapshot) {
-                  if (eventsSnapshot.hasError) {
-                    debugPrint('DISCOVER ERROR: ${eventsSnapshot.error}');
-                    return Center(child: Text('Hata: ${eventsSnapshot.error}'));
-                  }
-                  if (!eventsSnapshot.hasData) {
-                    return const Center(child: Text('Yükleniyor...'));
-                  }
-
-                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _postsStream(),
-                    builder: (context, postsSnapshot) {
+                stream: _postsStream(),
+                builder: (context, postsSnapshot) {
                       if (postsSnapshot.hasError) {
                         debugPrint('DISCOVER ERROR: ${postsSnapshot.error}');
                         return Center(
@@ -489,87 +442,119 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                         );
                       }
 
-                      return ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        itemBuilder: (context, index) {
-                          final item = feedItems[index];
-                          if (item.type == _FeedItemType.post) {
-                            final data = item.payload;
-                            final clubId = _pickString(data, const [
-                              'kulupId',
-                              'kulupID',
-                              'clubId',
-                            ]);
-                            final text = _pickString(data, const [
-                              'metin',
-                              'text',
-                              'icerik',
-                              'içerik',
-                            ]);
-                            return _PostCard(
-                              clubId: clubId,
-                              text: text,
-                              createdAt: item.createdAt,
-                            );
+                      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: ClubRepo.listClubs(),
+                        builder: (context, clubsSnapshot) {
+                          final clubLogoKeys = <String, String>{};
+                          if (clubsSnapshot.hasData) {
+                            for (final clubDoc in clubsSnapshot.data!.docs) {
+                              final logoKey = _pickString(clubDoc.data(), const [
+                                'logoKey',
+                                'logo_key',
+                              ]);
+                              if (logoKey.isNotEmpty) {
+                                clubLogoKeys[clubDoc.id] = logoKey;
+                              }
+                            }
                           }
 
-                          final data = item.payload;
-                          final eventId = (data['id'] ?? '').toString();
-                          final title = _pickString(data, const [
-                            'title',
-                            'Baslik',
-                            'Başlık',
-                            'başlık',
-                            'baslik',
-                          ]);
-                          final clubId = _pickString(data, const [
-                            'clubId',
-                            'Kulup',
-                            'kulup',
-                          ]);
-                          final category = _pickString(data, const [
-                            'category',
-                            'Kategori',
-                            'kategori',
-                          ]);
-                          final location = _pickString(data, const [
-                            'location',
-                            'Konum',
-                            'konum',
-                          ]);
-                          final tags = _pickStringList(data, const [
-                            'tags',
-                            'Etiketler',
-                            'etiketler',
-                          ]);
+                          return ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                            itemBuilder: (context, index) {
+                              final item = feedItems[index];
+                              if (item.type == _FeedItemType.post) {
+                                final data = item.payload;
+                                final clubId = _pickString(data, const [
+                                  'kulupId',
+                                  'kulupID',
+                                  'clubId',
+                                ]);
+                                final clubName = _pickString(data, const [
+                                  'clubName',
+                                  'Reklam',
+                                  'ad',
+                                  'name',
+                                ]);
+                                final text = _pickString(data, const [
+                                  'metin',
+                                  'text',
+                                  'icerik',
+                                  'içerik',
+                                ]);
+                                final hashtags = _pickStringList(data, const [
+                                  'hashtags',
+                                  'tags',
+                                  'Etiketler',
+                                  'etiketler',
+                                ]);
+                                return _PostCard(
+                                  clubName: clubName.isNotEmpty
+                                      ? clubName
+                                      : (clubId.isNotEmpty ? clubId : 'Kulüp'),
+                                  logoKey: clubLogoKeys[clubId],
+                                  text: text,
+                                  hashtags: hashtags,
+                                  createdAt: item.createdAt,
+                                );
+                              }
 
-                          return EventCard(
-                            title: title,
-                            clubId: clubId,
-                            category: category,
-                            location: location,
-                            tags: tags,
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => EventDetailScreen(
-                                    eventId: eventId,
-                                    data: data,
-                                  ),
+                              final data = item.payload;
+                              final eventId = (data['id'] ?? '').toString();
+                              final title = _pickString(data, const [
+                                'title',
+                                'Baslik',
+                                'Başlık',
+                                'başlık',
+                                'baslik',
+                              ]);
+                              final clubId = _pickString(data, const [
+                                'clubId',
+                                'Kulup',
+                                'kulup',
+                              ]);
+                              final category = _pickString(data, const [
+                                'category',
+                                'Kategori',
+                                'kategori',
+                              ]);
+                              final location = _pickString(data, const [
+                                'location',
+                                'Konum',
+                                'konum',
+                              ]);
+                              final tags = _pickStringList(data, const [
+                                'tags',
+                                'Etiketler',
+                                'etiketler',
+                              ]);
+
+                              return EventCard(
+                                title: title,
+                                clubId: clubId,
+                                category: category,
+                                location: location,
+                                tags: tags,
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => EventDetailScreen(
+                                        eventId: eventId,
+                                        data: data,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                trailingActions: _DiscoverRsvpButton(
+                                  eventId: eventId,
                                 ),
                               );
                             },
-                            trailingActions: _DiscoverRsvpButton(
-                              eventId: eventId,
-                            ),
+                            separatorBuilder: (context, index) =>
+                                const SizedBox(height: 12),
+                            itemCount: feedItems.length,
                           );
                         },
-                        separatorBuilder: (context, index) =>
-                            const SizedBox(height: 12),
-                        itemCount: feedItems.length,
                       );
-                    },
-                  );
                 },
               );
             },
@@ -587,41 +572,99 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
 class _PostCard extends StatelessWidget {
   const _PostCard({
-    required this.clubId,
+    required this.clubName,
+    this.logoKey,
     required this.text,
+    required this.hashtags,
     required this.createdAt,
   });
 
-  final String clubId;
+  final String clubName;
+  final String? logoKey;
   final String text;
+  final List<String> hashtags;
   final DateTime createdAt;
 
   @override
   Widget build(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    final displayText = text.isEmpty ? '(Duyuru metni yok)' : text;
+    final showDate =
+        createdAt.millisecondsSinceEpoch > 0;
+
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClubLogoAvatar(
+                name: clubName,
+                logoKey: logoKey,
+                size: 40,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      clubName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Kulüp Paylaşımı',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        color: muted,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           Text(
-            clubId.isEmpty ? 'Kulüp duyurusu' : clubId,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontSize: 17,
-              fontWeight: FontWeight.w600,
+            displayText,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              height: 1.45,
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            text.isEmpty ? '(Duyuru metni yok)' : text,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 10),
-          Text(
-            _formatDate(createdAt),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+          if (hashtags.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: hashtags
+                  .map((tag) => TagChip(label: tag, compact: true))
+                  .toList(),
             ),
-          ),
+          ],
+          if (showDate) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                _formatDate(createdAt),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontSize: 11,
+                  color: muted,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -667,19 +710,23 @@ class _DiscoverRsvpButtonState extends State<_DiscoverRsvpButton> {
       final result = await _rsvpFuture;
       await result.ref.set({
         'eventId': widget.eventId,
-        'UID': _uid,
         'uid': _uid,
         'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
+
+      final newBadges = await awardFirstRsvpBadge(_uid);
 
       if (!mounted) return;
       setState(() {
         _isSaving = false;
         _refreshRsvp();
       });
+      final message = newBadges.isEmpty
+          ? 'Katılım kaydedildi'
+          : 'Katılım kaydedildi • Yeni rozet: ${newBadges.join(', ')}';
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Katılım kaydedildi')));
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (error) {
       if (!mounted) return;
       setState(() => _isSaving = false);

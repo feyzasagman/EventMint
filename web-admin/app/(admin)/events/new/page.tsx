@@ -2,9 +2,11 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { addDoc, collection, doc, getDoc, onSnapshot, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "../../../../lib/firebase";
+import { normalizeAppRole } from "../../../../lib/role";
+import { type ClubListItem, subscribeClubs } from "../../../../lib/clubRepo";
 import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
 import { Chip } from "../../../components/ui/chip";
@@ -44,39 +46,29 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : JSON.stringify(error);
 }
 
+type EventAiAction = "fill" | "suggest_tags" | "improve_description";
+
+type EventAiData = {
+  title: string;
+  category: string;
+  location: string;
+  description: string;
+  tags: string[];
+};
+
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
-const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-const ALLOWED_CATEGORIES = ["STEM", "Sosyal", "Sanat", "Spor"] as const;
-const MODEL_PRIORITY = [
-  "gemini-1.5-flash",
-  "gemini-1.5-flash-latest",
-  "gemini-2.0-flash",
-  "gemini-1.5-pro",
-  "gemini-1.5-pro-latest",
-] as const;
-const AI_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const AI_CACHE_PREFIX = "eventmint:ai-fill:";
-
-let cachedGenerationModels: string[] | null = null;
-let cachedGenerationModelCount = 0;
-
-type AllowedCategory = (typeof ALLOWED_CATEGORIES)[number];
+const isDevMode = process.env.NODE_ENV === "development";
 
 type AdminRole = "admin" | "club_manager" | "student";
 
-type ClubOption = {
-  id: string;
-  label: string;
+type ModerationBlock = {
+  risk: string;
+  reason: string;
+  suggestions: string[];
 };
 
 function normalizeRole(value: unknown): AdminRole {
-  if (value === "admin" || value === "club_manager" || value === "student") {
-    return value;
-  }
-  if (value === "manager") {
-    return "club_manager";
-  }
-  return "student";
+  return normalizeAppRole(value);
 }
 
 function pickString(data: Record<string, unknown>, keys: string[]) {
@@ -85,99 +77,6 @@ function pickString(data: Record<string, unknown>, keys: string[]) {
     if (typeof value === "string" && value.trim()) return value;
   }
   return undefined;
-}
-
-function cleanJsonText(raw: string) {
-  const trimmed = raw.trim();
-  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return (fenceMatch?.[1] ?? trimmed).trim();
-}
-
-function parseAiPayload(payload: unknown): {
-  category: AllowedCategory;
-  tags: string[];
-  improvedDescription: string;
-} {
-  if (typeof payload !== "object" || payload == null) {
-    throw new Error("AI yanıtı beklenen formatta değil.");
-  }
-  const data = payload as Record<string, unknown>;
-  const category = String(data.category ?? "").trim() as AllowedCategory;
-  if (!ALLOWED_CATEGORIES.includes(category)) {
-    throw new Error("Kategori geçersiz.");
-  }
-
-  if (!Array.isArray(data.tags)) {
-    throw new Error("Tags alanı geçersiz.");
-  }
-  const tags = data.tags
-    .map((tag) => String(tag).trim())
-    .filter(Boolean)
-    .slice(0, 6);
-  if (tags.length < 2 || tags.length > 6) {
-    throw new Error("Tags 2-6 aralığında olmalı.");
-  }
-
-  const improvedDescription = String(data.improvedDescription ?? "").trim();
-  if (!improvedDescription) {
-    throw new Error("Açıklama boş olamaz.");
-  }
-  if (improvedDescription.length > 300) {
-    throw new Error("Açıklama 300 karakteri geçiyor.");
-  }
-
-  return {
-    category,
-    tags: Array.from(new Set(tags)),
-    improvedDescription,
-  };
-}
-
-function buildAiCacheKey(title: string, description: string) {
-  const normalized = `${title.trim().toLocaleLowerCase("tr-TR")}||${description
-    .trim()
-    .toLocaleLowerCase("tr-TR")}`;
-  return `${AI_CACHE_PREFIX}${encodeURIComponent(normalized)}`;
-}
-
-function readAiCache(key: string) {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as {
-      category: AllowedCategory;
-      tags: string[];
-      improvedDescription: string;
-      model?: string;
-      cachedAt: number;
-    };
-    if (!parsed.cachedAt || Date.now() - parsed.cachedAt > AI_CACHE_TTL_MS) {
-      window.localStorage.removeItem(key);
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeAiCache(
-  key: string,
-  data: { category: AllowedCategory; tags: string[]; improvedDescription: string; model?: string }
-) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      key,
-      JSON.stringify({
-        ...data,
-        cachedAt: Date.now(),
-      })
-    );
-  } catch {
-    // cache best-effort
-  }
 }
 
 export default function NewEventPage() {
@@ -192,17 +91,17 @@ export default function NewEventPage() {
   const [tagInput, setTagInput] = useState("");
   const [status, setStatus] = useState("draft");
   const [saving, setSaving] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
+  const [aiLoadingMode, setAiLoadingMode] = useState<EventAiAction | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiToast, setAiToast] = useState<string | null>(null);
   const [aiModel, setAiModel] = useState<string | null>(null);
-  const [availableModelCount, setAvailableModelCount] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  const [moderationBlock, setModerationBlock] = useState<ModerationBlock | null>(null);
   const [success, setSuccess] = useState(false);
   const [checkingAccess, setCheckingAccess] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
   const [role, setRole] = useState<AdminRole | null>(null);
-  const [clubs, setClubs] = useState<ClubOption[]>([]);
+  const [clubs, setClubs] = useState<ClubListItem[]>([]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -223,7 +122,7 @@ export default function NewEventPage() {
           setClubId(resolvedClubId);
         }
         if (resolvedRole === "student") {
-          router.replace("/auth");
+          router.replace("/app/events");
         }
       } catch (e: unknown) {
         setError(getErrorMessage(e));
@@ -242,20 +141,33 @@ export default function NewEventPage() {
   }, [aiToast]);
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, "Kulüpler"), (snapshot) => {
-      setClubs(
-        snapshot.docs.map((clubDoc) => {
-          const data = clubDoc.data() as Record<string, unknown>;
-          return {
-            id: clubDoc.id,
-            label: pickString(data, ["name", "title", "ad", "Ad", "clubId"]) ?? clubDoc.id,
-          };
-        })
-      );
-    });
+    setModerationBlock(null);
+  }, [title, description]);
 
-    return unsubscribe;
+  useEffect(() => {
+    return subscribeClubs(setClubs);
   }, []);
+
+  const persistEvent = async (statusValue: string) => {
+    const eventClubId = role === "club_manager" ? userClubId.trim() : clubId.trim();
+    if (!eventClubId) {
+      throw new Error("Club ID gerekli.");
+    }
+
+    const { inferredCategory, inferredTags } = inferCategoryAndTags(title, description);
+    const resolvedCategory = category.trim() || inferredCategory;
+    const resolvedTags = tags.length > 0 ? tags : inferredTags;
+    await addDoc(collection(db, "events"), {
+      title,
+      clubId: eventClubId,
+      category: resolvedCategory,
+      location,
+      description,
+      status: statusValue,
+      tags: resolvedTags,
+      createdAt: serverTimestamp(),
+    });
+  };
 
   const createEvent = async (statusOverride?: string) => {
     if (!hasAccess) {
@@ -263,35 +175,81 @@ export default function NewEventPage() {
       return;
     }
 
-    const eventClubId = role === "club_manager" ? userClubId.trim() : clubId.trim();
-    if (!eventClubId) {
-      setError("Club ID gerekli.");
+    setSaving(true);
+    setError(null);
+    setModerationBlock(null);
+    setSuccess(false);
+
+    try {
+      await persistEvent(statusOverride ?? status);
+      setSuccess(true);
+      router.push("/events");
+    } catch (err: unknown) {
+      console.error("Create event error:", err);
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!hasAccess) {
+      setError("Yetkin yok.");
       return;
     }
 
     setSaving(true);
     setError(null);
+    setModerationBlock(null);
     setSuccess(false);
 
     try {
-      const { inferredCategory, inferredTags } = inferCategoryAndTags(title, description);
-      const resolvedCategory = category.trim() || inferredCategory;
-      const resolvedTags = tags.length > 0 ? tags : inferredTags;
-      await addDoc(collection(db, "events"), {
-        title,
-        clubId: eventClubId,
-        category: resolvedCategory,
-        location,
-        description,
-        status: statusOverride ?? status,
-        tags: resolvedTags,
-        createdAt: serverTimestamp(),
+      const response = await fetch("/api/ai/moderate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: `${title.trim()}\n${description.trim()}`,
+          language: "tr",
+        }),
       });
 
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        risk?: string;
+        reason?: string;
+        suggestions?: string[];
+        fallback?: boolean;
+        warning?: string;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        setError(payload.error ?? "Moderasyon kontrolü başarısız.");
+        return;
+      }
+
+      if (!payload.ok) {
+        setModerationBlock({
+          risk: payload.risk ?? "high",
+          reason: payload.reason ?? "İçerik yayına uygun değil.",
+          suggestions: Array.isArray(payload.suggestions) ? payload.suggestions : [],
+        });
+        return;
+      }
+
+      if (payload.fallback) {
+        setAiToast(
+          payload.warning
+            ? `Yerel moderasyon kullanıldı (${payload.warning})`
+            : "Yerel moderasyon kullanıldı; yayın devam ediyor."
+        );
+      }
+
+      await persistEvent("published");
       setSuccess(true);
       router.push("/events");
     } catch (err: unknown) {
-      console.error("Create event error:", err);
+      console.error("Publish event error:", err);
       setError(getErrorMessage(err));
     } finally {
       setSaving(false);
@@ -318,165 +276,105 @@ export default function NewEventPage() {
     setTags((current) => current.filter((item) => item !== tag));
   };
 
-  const handleAiFill = async () => {
-    if (!title.trim() || !description.trim()) return;
-    if (!geminiApiKey) {
-      setAiError("Gemini API key bulunamadı (.env.local).");
+  const applyAiResult = (action: EventAiAction, data: EventAiData) => {
+    if (action === "improve_description") {
+      if (data.description) setDescription(data.description);
+      if (data.tags.length > 0) setTags(data.tags);
       return;
     }
-    setAiLoading(true);
+
+    if (action === "fill") {
+      if (!title.trim() && data.title) setTitle(data.title);
+      if (!category.trim() && data.category) setCategory(data.category);
+      if (!location.trim() && data.location) setLocation(data.location);
+      if (!description.trim() && data.description) setDescription(data.description);
+    } else if (action === "suggest_tags") {
+      if (!category.trim() && data.category) setCategory(data.category);
+    }
+
+    if (data.tags.length > 0) {
+      setTags((current) => [...new Set([...current, ...data.tags])]);
+    }
+  };
+
+  const callEventAi = async (action: EventAiAction) => {
+    const payloadInput = {
+      title: title.trim(),
+      category: category.trim(),
+      location: location.trim(),
+      description: description.trim(),
+      tags,
+    };
+
+    if (!payloadInput.title && !payloadInput.description) return;
+    if (action === "improve_description" && !payloadInput.description) return;
+
+    setAiLoadingMode(action);
     setAiError(null);
     setError(null);
+
     try {
-      const cacheKey = buildAiCacheKey(title, description);
-      const cached = readAiCache(cacheKey);
-      if (cached) {
-        setCategory(cached.category);
-        setTags(cached.tags);
-        setDescription(cached.improvedDescription);
-        setAiModel(cached.model ?? aiModel);
-        setAiToast("Son AI sonucu önbellekten uygulandı.");
+      const response = await fetch("/api/ai/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...payloadInput }),
+      });
+
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        data?: EventAiData;
+        model?: string;
+        cached?: boolean;
+        fallback?: boolean;
+        warning?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.ok) {
+        const message =
+          response.status === 429 && payload.error?.includes("hızlı")
+            ? payload.error
+            : payload.error
+              ? `AI çağrısı başarısız: ${payload.error}`
+              : `AI çağrısı başarısız (${response.status})`;
+        setAiError(message);
         return;
       }
 
-      const prompt = [
-        "Türkçe yaz, sadece geçerli JSON döndür:",
-        '{ "category":"STEM|Sosyal|Sanat|Spor", "tags":["..."], "improvedDescription":"..." }',
-        "Kurallar:",
-        "- tags 2-6 arası",
-        "- improvedDescription 300 karakteri geçmesin",
-        "- JSON dışında hiçbir şey yazma",
-        "",
-        `Title: ${title}`,
-        `Description: ${description}`,
-      ].join("\n");
-
-      const callGemini = async (model: string) => {
-        const endpoint =
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.NEXT_PUBLIC_GEMINI_API_KEY}`;
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 300,
-            },
-          }),
-        });
-
-        if (!response.ok) {
-          const responseText = await response.text();
-          const error = new Error(
-            `Gemini çağrısı başarısız (${response.status}) - ${(responseText || "boş response").slice(0, 200)}`
-          ) as Error & { status?: number };
-          error.status = response.status;
-          throw error;
-        }
-
-        return response.json() as Promise<{
-          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-        }>;
-      };
-
-      let normalized: string[];
-      if (cachedGenerationModels) {
-        normalized = cachedGenerationModels;
-      } else {
-        const modelsResponse = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models?key=${geminiApiKey}`
-        );
-        if (!modelsResponse.ok) {
-          const modelListText = await modelsResponse.text();
-          throw new Error(
-            `Model listesi alınamadı (${modelsResponse.status}) - ${(modelListText || "boş response").slice(0, 200)}`
-          );
-        }
-
-        const modelsJson = (await modelsResponse.json()) as {
-          models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
-        };
-        const generationModels = (modelsJson.models ?? []).filter((model) =>
-          (model.supportedGenerationMethods ?? []).includes("generateContent")
-        );
-        normalized = generationModels
-          .map((model) => (model.name ?? "").replace(/^models\//, ""))
-          .filter(Boolean);
-        cachedGenerationModels = normalized;
-        cachedGenerationModelCount = normalized.length;
-      }
-      setAvailableModelCount(cachedGenerationModelCount || normalized.length);
-
-      const selectedModel =
-        MODEL_PRIORITY.find((candidate) => normalized.includes(candidate)) ??
-        normalized[0];
-
-      if (!selectedModel) {
-        throw new Error("Uygun generateContent modeli bulunamadı.");
+      if (!payload.data) {
+        setAiError("Sunucudan eksik AI yanıtı alındı.");
+        return;
       }
 
-      const responseResult = await callGemini(selectedModel);
-      setAiModel(selectedModel);
+      if (payload.model) setAiModel(payload.model);
+      applyAiResult(action, payload.data);
 
-      const text = (responseResult.candidates?.[0]?.content?.parts ?? [])
-        .map((part) => part.text ?? "")
-        .join("")
-        .trim();
-      if (!text) throw new Error("AI boş yanıt döndürdü.");
-
-      const cleaned = cleanJsonText(text);
-      const parsed = parseAiPayload(JSON.parse(cleaned));
-
-      setCategory(parsed.category);
-      setTags(parsed.tags);
-      setDescription(parsed.improvedDescription);
-      writeAiCache(cacheKey, {
-        category: parsed.category,
-        tags: parsed.tags,
-        improvedDescription: parsed.improvedDescription,
-        model: selectedModel,
-      });
-      setAiToast("Alanlar AI ile dolduruldu.");
-    } catch (aiFillError) {
-      const message =
-        aiFillError instanceof Error ? aiFillError.message : "AI doldurma başarısız.";
-      const isQuotaError =
-        message.includes("(429)") ||
-        message.toLowerCase().includes("resource_exhausted") ||
-        message.toLowerCase().includes("kota");
-
-      if (isQuotaError) {
-        const cacheKey = buildAiCacheKey(title, description);
-        const cached = readAiCache(cacheKey);
-        if (cached) {
-          setCategory(cached.category);
-          setTags(cached.tags);
-          setDescription(cached.improvedDescription);
-          setAiModel(cached.model ?? aiModel);
-          setAiError("AI kotası dolu. Son sonucu tekrar kullanabilir veya manuel devam edebilirsin.");
-          setAiToast("Kota dolu: son önbellek sonucu uygulandı.");
-          return;
-        }
-        const { inferredCategory, inferredTags } = inferCategoryAndTags(
-          title,
-          description
-        );
-        if (!category.trim() && inferredCategory) {
-          setCategory(inferredCategory);
-        }
-        if (tags.length === 0 && inferredTags.length > 0) {
-          setTags(inferredTags.slice(0, 6));
-        }
-        setAiError("AI kotası dolu. Son sonucu tekrar kullanabilir veya manuel devam edebilirsin.");
-        setAiToast("AI kotası dolu: yerel öneri uygulandı.");
-      } else {
-        setAiError(message);
+      if (payload.warning) {
+        setAiToast(`Yedek öneri uygulandı (${payload.warning})`);
+        return;
       }
+
+      setAiToast(
+        payload.cached
+          ? "AI önerisi önbellekten uygulandı."
+          : payload.fallback
+            ? "Yedek öneri uygulandı (OpenAI geçici olarak kullanılamıyor)."
+            : action === "fill"
+              ? "Form AI ile dolduruldu."
+              : action === "suggest_tags"
+                ? "Etiket ve kategori önerildi."
+                : "Açıklama iyileştirildi."
+      );
+    } catch {
+      setAiError("AI çağrısı başarısız: ağ hatası. 30 sn sonra tekrar deneyin.");
     } finally {
-      setAiLoading(false);
+      setAiLoadingMode(null);
     }
   };
+
+  const aiBusy = aiLoadingMode !== null;
+  const aiInputReady = Boolean(title.trim() || description.trim());
+  const improveInputReady = Boolean(description.trim());
 
   if (checkingAccess) {
     return (
@@ -501,6 +399,48 @@ export default function NewEventPage() {
 
       <Card className="p-5">
         <form onSubmit={onSubmit} className="space-y-4">
+        <div className="flex flex-wrap gap-2 border-b border-border pb-4">
+          <Button
+            type="button"
+            onClick={() => callEventAi("fill")}
+            disabled={aiBusy || !aiInputReady}
+            className="min-h-9 px-3"
+          >
+            {aiLoadingMode === "fill" && (
+              <span className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            )}
+            ✨ AI ile doldur
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => callEventAi("suggest_tags")}
+            disabled={aiBusy || !aiInputReady}
+            className="min-h-9 px-3"
+          >
+            {aiLoadingMode === "suggest_tags" && (
+              <span className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            )}
+            Etiket+Kategori öner
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => callEventAi("improve_description")}
+            disabled={aiBusy || !improveInputReady}
+            className="min-h-9 px-3"
+          >
+            {aiLoadingMode === "improve_description" && (
+              <span className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            )}
+            Açıklamayı iyileştir
+          </Button>
+        </div>
+
+        {isDevMode && (
+          <p className="text-xs text-text2">Model (dev): {aiModel ?? "-"}</p>
+        )}
+
         <div>
           <label className="mb-1 block text-sm font-medium" htmlFor="title">
             Title
@@ -574,27 +514,16 @@ export default function NewEventPage() {
           />
         </div>
 
-        <div>
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <label className="block text-sm font-medium" htmlFor="tags">
-              Tags
-            </label>
-            <Button
-              type="button"
-              onClick={handleAiFill}
-              disabled={aiLoading || !title.trim() || !description.trim()}
-              className="min-h-9 px-3"
-            >
-              {aiLoading && (
-                <span className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-              )}
-              ✨ AI ile doldur
-            </Button>
-          </div>
-          <p className="mb-2 text-xs text-text2">
-            Model: {aiModel ?? "-"}
-            {availableModelCount > 0 ? ` (${availableModelCount} model bulundu)` : ""}
+        {aiError && (
+          <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+            {aiError}
           </p>
+        )}
+
+        <div>
+          <label className="mb-2 block text-sm font-medium" htmlFor="tags">
+            Tags
+          </label>
           <div className="flex flex-wrap gap-2">
             {tags.map((tag) => (
               <button key={tag} type="button" onClick={() => removeTag(tag)} className="cursor-pointer">
@@ -616,7 +545,6 @@ export default function NewEventPage() {
             placeholder="Etiket ekle, Enter ile onayla"
             className="ui-input mt-2"
           />
-          {aiError && <p className="mt-2 text-sm text-danger">{aiError}</p>}
         </div>
 
         <div>
@@ -633,6 +561,26 @@ export default function NewEventPage() {
             <option value="published">published</option>
           </select>
         </div>
+
+        {moderationBlock && (
+          <div
+            role="alert"
+            className="rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-danger"
+          >
+            <p className="font-semibold">Yayın engellendi</p>
+            <p className="mt-1 text-sm">
+              <span className="font-medium">Risk:</span> {moderationBlock.risk}
+            </p>
+            <p className="mt-2 text-sm">{moderationBlock.reason}</p>
+            {moderationBlock.suggestions.length > 0 && (
+              <ul className="mt-2 list-inside list-disc space-y-1 text-sm">
+                {moderationBlock.suggestions.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {error && (
           <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
@@ -655,11 +603,11 @@ export default function NewEventPage() {
           </Button>
           <Button
             type="button"
-            onClick={() => createEvent("published")}
+            onClick={handlePublish}
             disabled={saving}
             variant="secondary"
           >
-            Yayınla
+            {saving ? "Kontrol ediliyor..." : "Yayınla"}
           </Button>
         </div>
         </form>

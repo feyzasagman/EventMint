@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import 'club_detail_screen.dart';
 import 'qr_scan_screen.dart';
+import '../services/badge_service.dart';
+import '../services/club_repo.dart';
 
 String pickString(Map data, List<String> keys) {
   for (final key in keys) {
@@ -54,18 +56,14 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
 
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
 
-  DocumentReference<Map<String, dynamic>> get _rsvpRef => FirebaseFirestore
-      .instance
-      .collection('rsvps')
-      .doc('${widget.eventId}_$_uid');
+  DocumentReference<Map<String, dynamic>> get _rsvpRef =>
+      ClubRepo.rsvpDoc(widget.eventId, _uid);
 
-  DocumentReference<Map<String, dynamic>> get _checkinRef => FirebaseFirestore
-      .instance
-      .collection('Check-in')
-      .doc('${widget.eventId}_$_uid');
+  DocumentReference<Map<String, dynamic>> get _checkinRef =>
+      ClubRepo.checkinDoc(widget.eventId, _uid);
 
   DocumentReference<Map<String, dynamic>> get _userRef =>
-      FirebaseFirestore.instance.collection('Kullanıcılar').doc(_uid);
+      ClubRepo.userDoc(_uid);
 
   @override
   void initState() {
@@ -78,8 +76,7 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
     try {
       Map<String, dynamic>? eventData = _eventData;
       if (eventData == null) {
-        final eventDoc = await FirebaseFirestore.instance
-            .collection('events')
+        final eventDoc = await ClubRepo.col(ClubRepo.events)
             .doc(widget.eventId)
             .get();
         eventData = eventDoc.data();
@@ -116,7 +113,9 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
         'eventId': widget.eventId,
         'uid': _uid,
         'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
+
+      final newBadges = await awardFirstRsvpBadge(_uid);
 
       if (!mounted) return;
 
@@ -124,7 +123,11 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
         _isRsvped = true;
         _isSaving = false;
       });
-      _showSnackBar('RSVP kaydedildi');
+      if (newBadges.isEmpty) {
+        _showSnackBar('RSVP kaydedildi');
+      } else {
+        _showSnackBar('RSVP kaydedildi • Yeni rozet: ${newBadges.join(', ')}');
+      }
     } catch (error) {
       if (!mounted) return;
 
