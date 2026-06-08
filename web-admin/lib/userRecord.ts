@@ -89,6 +89,8 @@ export async function getMergedUserRecord(uid: string): Promise<MergedUserRecord
     clubId: pickString(merged, ["clubId", "Kulup", "kulup", "Kulüp"]),
     banned: merged.banned === true || merged.Banned === true,
     points: pickNumber(merged, ["Toplam puanlar", "points", "pointsTotal", "Puan"]),
-    badges: parseBadges(merged.Rozetler ?? merged.rozetler ?? merged.badges),
+    badges: parseBadges(
+      merged.Rozetler ?? merged.rozetler ?? merged.badges ?? merged.Badges
+    ),
   };
 }

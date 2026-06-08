@@ -1,5 +1,7 @@
 "use client";
 
+import Image from "next/image";
+
 export type AuthMode = "student" | "admin";
 
 export function AuthCard({
@@ -48,10 +50,17 @@ export function AuthCard({
       className="w-full max-w-[430px] rounded-[30px] border border-white/10 bg-white/[0.08] p-8 text-white shadow-2xl shadow-black/40 backdrop-blur-2xl"
     >
       <div className="mb-7 text-center">
-        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-indigo-500 text-xl font-bold shadow-lg shadow-indigo-500/30">
-          E
+        <div className="mx-auto mb-4 flex size-[72px] items-center justify-center">
+          <Image
+            src="/logo.png"
+            alt="EventMint"
+            width={72}
+            height={72}
+            className="object-contain"
+            priority
+          />
         </div>
-        <h1 className="text-3xl font-semibold tracking-tight">EventMint Admin</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">EventMint</h1>
         <p className="mt-2 text-sm text-slate-300">
           {isRegister ? "Yeni hesap oluştur" : mode === "admin" ? "Yönetici girişi" : "Öğrenci girişi"}
         </p>

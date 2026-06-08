@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { collection, DocumentData, onSnapshot, orderBy, query, QuerySnapshot } from "firebase/firestore";
 import { EmptyState } from "../../../components/EmptyState";
 import { EventCard } from "../../../components/EventCard";
+import { Card } from "../../../components/ui/card";
 import { db } from "../../../../lib/firebase";
 
 type EventItem = {
@@ -119,17 +120,17 @@ export default function UserDiscoverPage() {
   return (
     <>
       <div className="mb-8">
-        <p className="text-sm font-medium uppercase tracking-wide text-indigo-600">Keşfet</p>
+        <p className="text-sm font-medium uppercase tracking-wide text-brand">Keşfet</p>
         <h1 className="mt-1 text-4xl font-semibold tracking-tight">Yeni etkinlikler bul</h1>
-        <p className="mt-2 text-sm text-slate-600">Kategori ve etiketlerle ilgini çeken etkinlikleri filtrele.</p>
+        <p className="mt-2 text-sm text-text2">Kategori ve etiketlerle ilgini çeken etkinlikleri filtrele.</p>
       </div>
 
-      <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <Card className="mb-6 p-4">
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           placeholder="Etkinlik, kulüp, kategori, konum veya etiket ara"
-          className="min-h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none transition focus:border-indigo-400 focus:bg-white"
+          className="ui-input"
         />
         <div className="mt-4 flex flex-wrap gap-2">
           {categories.map((category) => (
@@ -137,7 +138,7 @@ export default function UserDiscoverPage() {
               key={category}
               type="button"
               onClick={() => setSelectedCategory(category)}
-              className={`rounded-full px-3 py-2 text-sm font-semibold ${selectedCategory === category ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700"}`}
+              className={`rounded-full px-3 py-2 text-sm font-semibold ${selectedCategory === category ? "bg-brand text-text" : "bg-surface2 text-text2"}`}
             >
               {category}
             </button>
@@ -149,18 +150,18 @@ export default function UserDiscoverPage() {
               key={tag}
               type="button"
               onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
-              className={`rounded-full px-3 py-2 text-sm font-semibold ${selectedTag === tag ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}
+              className={`rounded-full px-3 py-2 text-sm font-semibold ${selectedTag === tag ? "bg-brand/25 text-text" : "bg-surface2 text-text2"}`}
             >
               {tag}
             </button>
           ))}
           {(searchQuery || selectedCategory !== "Tümü" || selectedTag) && (
-            <button type="button" onClick={clearFilters} className="rounded-full border border-slate-300 px-3 py-2 text-sm font-semibold">
+            <button type="button" onClick={clearFilters} className="rounded-full border border-border px-3 py-2 text-sm font-semibold text-text2">
               Filtreyi temizle
             </button>
           )}
         </div>
-      </div>
+      </Card>
 
       {loading && <div className="h-56 animate-pulse rounded-3xl bg-slate-100" />}
       {error && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">{error}</p>}

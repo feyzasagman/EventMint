@@ -1,9 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../services/club_repo.dart';
 import '../services/user_record_service.dart';
+import '../widgets/app_logo.dart';
 import 'banned_screen.dart';
-
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -124,9 +125,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _ensureUserDocument(User? user) async {
     if (user == null) return;
 
-    final ref = FirebaseFirestore.instance
-        .collection('Kullanıcılar')
-        .doc(user.uid);
+    final ref = ClubRepo.userDoc(user.uid);
     final snapshot = await ref.get();
     if (snapshot.exists) return;
 
@@ -173,6 +172,8 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                const Center(child: AppLogo()),
+                const SizedBox(height: 12),
                 Text(
                   'EventMint',
                   textAlign: TextAlign.center,

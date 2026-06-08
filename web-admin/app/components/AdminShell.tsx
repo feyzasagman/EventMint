@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
+import { EventMintLogo } from "./EventMintLogo";
 import { auth } from "../../lib/firebase";
 
 const navItems = [
@@ -32,9 +33,7 @@ export function AdminShell({
     <div className="min-h-screen bg-zinc-50 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-zinc-200 bg-white/90 px-5 py-6 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90 lg:block">
         <Link href="/events" className="flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-2xl bg-indigo-600 text-lg font-bold text-white">
-            E
-          </div>
+          <EventMintLogo size={44} />
           <div>
             <p className="font-semibold">EventMint</p>
             <p className="text-xs text-zinc-500">Admin Panel</p>

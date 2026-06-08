@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../services/club_repo.dart';
+
 class CreateClubScreen extends StatefulWidget {
   const CreateClubScreen({super.key});
 
@@ -50,9 +52,7 @@ class _CreateClubScreenState extends State<CreateClubScreen> {
     });
 
     try {
-      final clubRef = FirebaseFirestore.instance
-          .collection('Kulüpler')
-          .doc(handle);
+      final clubRef = ClubRepo.clubDoc(handle);
       final existingClub = await clubRef.get();
       if (existingClub.exists) {
         setState(() => _error = 'Bu handle kullanımda.');
@@ -60,14 +60,13 @@ class _CreateClubScreenState extends State<CreateClubScreen> {
       }
 
       await clubRef.set({
-        'ad': _nameController.text.trim(),
+        'name': _nameController.text.trim(),
         'handle': handle,
-        'aciklama': _descriptionController.text.trim(),
-        'etiketler': tags,
-        'durum': 'beklemede',
-        'sahipUID': user.uid,
-        'yoneticiUIDler': [user.uid],
-        'olusturulduAt': FieldValue.serverTimestamp(),
+        'bio': _descriptionController.text.trim(),
+        'tags': tags,
+        'status': 'pending',
+        'managerUids': [user.uid],
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
       if (!mounted) return;

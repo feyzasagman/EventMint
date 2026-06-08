@@ -21,6 +21,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "../../../lib/firebase";
+import { normalizeAppRole } from "../../../lib/role";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "../../components/EmptyState";
 import { EventCard } from "../../components/EventCard";
@@ -90,9 +91,7 @@ const categories = ["Tümü", "STEM", "Sanat", "Spor", "Sosyal"];
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 function normalizeRole(value: unknown): AdminRole {
-  if (value === "admin" || value === "club_manager" || value === "student") return value;
-  if (value === "manager") return "club_manager";
-  return "student";
+  return normalizeAppRole(value);
 }
 
 export default function EventsPage() {
@@ -134,7 +133,7 @@ export default function EventsPage() {
         setUserClubId(resolvedClubId);
 
         if (userRole === "student") {
-          router.replace("/auth");
+          router.replace("/app/events");
           setLoading(false);
           return;
         }

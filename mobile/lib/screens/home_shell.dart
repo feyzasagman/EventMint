@@ -1,12 +1,20 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'admin_events_screen.dart';
+import 'admin_managers_screen.dart';
+import 'admin_users_screen.dart';
+import 'club_manage_screen.dart';
 import 'clubs_list_screen.dart';
+import 'create_club_screen.dart';
 import 'discover_screen.dart';
 import 'events_list_screen.dart';
 import 'login_screen.dart';
 import 'profile_screen.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_logo.dart';
+import '../services/club_repo.dart';
+import '../services/user_record_service.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -25,40 +33,20 @@ class _HomeShellState extends State<HomeShell> {
     ProfileScreen(showScaffold: false),
   ];
 
-  Stream<int> _createRsvpCountStream(String uid) async* {
-    for (final collectionName in const ["RSVP'ler", 'rsvps']) {
-      for (final uidField in const ['UID', 'uid']) {
-        final initialSnapshot = await FirebaseFirestore.instance
-            .collection(collectionName)
-            .where(uidField, isEqualTo: uid)
-            .get();
-        if (initialSnapshot.docs.isNotEmpty) {
-          yield* FirebaseFirestore.instance
-              .collection(collectionName)
-              .where(uidField, isEqualTo: uid)
-              .snapshots()
-              .map((snapshot) => snapshot.docs.length);
-          return;
-        }
-      }
-    }
-
-    yield* FirebaseFirestore.instance
-        .collection("RSVP'ler")
-        .where('UID', isEqualTo: uid)
+  Stream<int> _createRsvpCountStream(String uid) {
+    ClubRepo.logCollection(ClubRepo.rsvps, op: 'count:$uid');
+    return ClubRepo.col(ClubRepo.rsvps)
+        .where('uid', isEqualTo: uid)
         .snapshots()
         .map((snapshot) => snapshot.docs.length);
   }
 
   Stream<bool> _createHasBadgeStream(String uid) {
-    return FirebaseFirestore.instance
-        .collection('Kullanıcılar')
-        .doc(uid)
-        .snapshots()
-        .map((snapshot) {
-          final badges = snapshot.data()?['Rozetler'];
-          return badges is List && badges.isNotEmpty;
-        });
+    ClubRepo.logCollection(ClubRepo.users, op: 'badges:$uid');
+    return ClubRepo.userDoc(uid).snapshots().map((snapshot) {
+      final badges = snapshot.data()?['badges'] ?? snapshot.data()?['Rozetler'];
+      return badges is List && badges.isNotEmpty;
+    });
   }
 
   Widget _rsvpBadgedIcon(IconData icon, int count) {
@@ -261,6 +249,171 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
+  Future<String?> _pickClub(BuildContext context) async {
+    final snapshot = await ClubRepo.col(ClubRepo.clubs).get();
+    if (!context.mounted) return null;
+    if (snapshot.docs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Önce bir kulüp oluşturun.')),
+      );
+      return null;
+    }
+
+    return showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Kulüp seç'),
+        children: snapshot.docs.map((doc) {
+          final data = doc.data();
+          final name = (data['name'] ?? data['ad'] ?? doc.id).toString();
+          return SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, doc.id),
+            child: Text(name),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Future<void> _openClubManage(BuildContext context, {
+    required String role,
+    required String clubId,
+    int initialTabIndex = 0,
+  }) async {
+    var targetClubId = clubId;
+    if (targetClubId.isEmpty && isAdminRole(role)) {
+      targetClubId = await _pickClub(context) ?? '';
+    }
+    if (targetClubId.isEmpty) {
+      if (context.mounted && !isAdminRole(role)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kulüp ataması gerekli.')),
+        );
+      }
+      return;
+    }
+    if (!context.mounted) return;
+    _openAdminScreen(
+      ClubManageScreen(clubId: targetClubId, initialTabIndex: initialTabIndex),
+    );
+  }
+
+  void _openAdminScreen(Widget screen) {
+    Navigator.of(context).pop();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => screen),
+    );
+  }
+
+  Widget _buildDrawer({required String role, required String clubId}) {
+    const destinations = [
+      (icon: Icons.event_outlined, selectedIcon: Icons.event, label: 'Etkinlikler', index: 0),
+      (icon: Icons.explore_outlined, selectedIcon: Icons.explore, label: 'Keşfet', index: 1),
+      (icon: Icons.groups_outlined, selectedIcon: Icons.groups, label: 'Kulüpler', index: 2),
+      (icon: Icons.person_outline, selectedIcon: Icons.person, label: 'Profil', index: 3),
+    ];
+
+    final admin = isAdminRole(role);
+    final staff = isStaffRole(role);
+
+    return Drawer(
+      backgroundColor: AppTheme.surface,
+      child: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+              child: Column(
+                children: [
+                  const AppLogo(),
+                  const SizedBox(height: 12),
+                  Text(
+                    admin ? 'EventMint Admin' : 'EventMint',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (admin)
+                    Text(
+                      'Yönetim Paneli',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            ...destinations.map((item) {
+              final selected = currentIndex == item.index;
+              return ListTile(
+                leading: Icon(selected ? item.selectedIcon : item.icon),
+                title: Text(item.label),
+                selected: selected,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  setState(() => currentIndex = item.index);
+                },
+              );
+            }),
+            if (staff) ...[
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Yönetim',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.event_note_outlined),
+                title: const Text('Etkinlik Yönetimi'),
+                onTap: () => _openAdminScreen(
+                  AdminEventsScreen(role: role, clubId: clubId),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.groups_outlined),
+                title: const Text('Kulübüm'),
+                onTap: () => _openClubManage(context, role: role, clubId: clubId),
+              ),
+              ListTile(
+                leading: const Icon(Icons.add_business_outlined),
+                title: const Text('Kulüp Oluştur'),
+                onTap: () => _openAdminScreen(const CreateClubScreen()),
+              ),
+            ],
+            if (admin) ...[
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Admin',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.people_outline),
+                title: const Text('Kullanıcılar'),
+                onTap: () => _openAdminScreen(const AdminUsersScreen()),
+              ),
+              ListTile(
+                leading: const Icon(Icons.admin_panel_settings_outlined),
+                title: const Text('Yöneticiler'),
+                onTap: () => _openAdminScreen(const AdminManagersScreen()),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
@@ -277,53 +430,63 @@ class _HomeShellState extends State<HomeShell> {
           return const LoginScreen();
         }
 
-        return StreamBuilder<int>(
-          stream: _createRsvpCountStream(user.uid),
-          builder: (context, rsvpSnapshot) {
-            return StreamBuilder<bool>(
-              stream: _createHasBadgeStream(user.uid),
-              builder: (context, badgeSnapshot) {
-                final rsvpCount = rsvpSnapshot.data ?? 0;
-                final hasBadge = badgeSnapshot.data ?? false;
+        return StreamBuilder<Map<String, dynamic>?>(
+          stream: streamUserRecord(user.uid),
+          builder: (context, userRecordSnapshot) {
+            final userRecord = userRecordSnapshot.data ?? {};
+            final role = normalizeUserRole(userRecord);
+            final clubId = getUserClubId(userRecord);
 
-                return Scaffold(
-                  appBar: _buildAppBar(),
-                  body: IndexedStack(index: currentIndex, children: _screens),
-                  floatingActionButton: _buildFab(),
-                  bottomNavigationBar: NavigationBar(
-                    selectedIndex: currentIndex,
-                    onDestinationSelected: (index) {
-                      setState(() => currentIndex = index);
-                    },
-                    destinations: [
-                      NavigationDestination(
-                        icon: _rsvpBadgedIcon(Icons.event_outlined, rsvpCount),
-                        selectedIcon: _rsvpBadgedIcon(Icons.event, rsvpCount),
-                        label: 'Etkinlikler',
+            return StreamBuilder<int>(
+              stream: _createRsvpCountStream(user.uid),
+              builder: (context, rsvpSnapshot) {
+                return StreamBuilder<bool>(
+                  stream: _createHasBadgeStream(user.uid),
+                  builder: (context, badgeSnapshot) {
+                    final rsvpCount = rsvpSnapshot.data ?? 0;
+                    final hasBadge = badgeSnapshot.data ?? false;
+
+                    return Scaffold(
+                      appBar: _buildAppBar(),
+                      drawer: _buildDrawer(role: role, clubId: clubId),
+                      body: IndexedStack(index: currentIndex, children: _screens),
+                      floatingActionButton: _buildFab(),
+                      bottomNavigationBar: NavigationBar(
+                        selectedIndex: currentIndex,
+                        onDestinationSelected: (index) {
+                          setState(() => currentIndex = index);
+                        },
+                        destinations: [
+                          NavigationDestination(
+                            icon: _rsvpBadgedIcon(Icons.event_outlined, rsvpCount),
+                            selectedIcon: _rsvpBadgedIcon(Icons.event, rsvpCount),
+                            label: 'Etkinlikler',
+                          ),
+                          const NavigationDestination(
+                            icon: Icon(Icons.explore_outlined),
+                            selectedIcon: Icon(Icons.explore),
+                            label: 'Keşfet',
+                          ),
+                          const NavigationDestination(
+                            icon: Icon(Icons.groups_outlined),
+                            selectedIcon: Icon(Icons.groups),
+                            label: 'Kulüpler',
+                          ),
+                          NavigationDestination(
+                            icon: _profileBadgedIcon(
+                              Icons.person_outline,
+                              hasBadge,
+                            ),
+                            selectedIcon: _profileBadgedIcon(
+                              Icons.person,
+                              hasBadge,
+                            ),
+                            label: 'Profil',
+                          ),
+                        ],
                       ),
-                      const NavigationDestination(
-                        icon: Icon(Icons.explore_outlined),
-                        selectedIcon: Icon(Icons.explore),
-                        label: 'Keşfet',
-                      ),
-                      const NavigationDestination(
-                        icon: Icon(Icons.groups_outlined),
-                        selectedIcon: Icon(Icons.groups),
-                        label: 'Kulüpler',
-                      ),
-                      NavigationDestination(
-                        icon: _profileBadgedIcon(
-                          Icons.person_outline,
-                          hasBadge,
-                        ),
-                        selectedIcon: _profileBadgedIcon(
-                          Icons.person,
-                          hasBadge,
-                        ),
-                        label: 'Profil',
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 );
               },
             );

@@ -2,15 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { EventMintLogo } from "../components/EventMintLogo";
 import { useAuth } from "../providers/AuthProvider";
 import { Chip } from "../components/ui/chip";
+import { getUserRecord } from "../../lib/guard";
 
-const navItems = [
+const baseNavItems = [
   { href: "/events", label: "Etkinlikler", icon: "📅" },
   { href: "/profile", label: "Profil", icon: "🙍" },
-  { href: "/club", label: "Kulübüm", icon: "🏛️" },
+  { href: "/clubs", label: "Kulüpler", icon: "🏛️" },
+  { href: "/club", label: "Kulübüm", icon: "⚙️" },
   { href: "/discover", label: "Keşfet", icon: "🔎" },
   { href: "/dashboard", label: "Dashboard", icon: "📊" },
+];
+
+const adminOnlyNavItems = [
   { href: "/admin/users", label: "Kullanıcılar", icon: "👥" },
   { href: "/admin/managers", label: "Yöneticiler", icon: "🛡️" },
 ];
@@ -22,15 +29,39 @@ export default function AdminLayout({
 }) {
   const pathname = usePathname();
   const { user, loading } = useAuth();
+  const [isAdmin, setIsAdmin] = useState(false);
   const identityLabel = loading ? "Loading..." : user?.email ?? "Guest";
+
+  useEffect(() => {
+    if (!user) {
+      setIsAdmin(false);
+      return;
+    }
+
+    let cancelled = false;
+    getUserRecord(user.uid)
+      .then((record) => {
+        if (!cancelled) setIsAdmin(record.role === "admin");
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdmin(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const navItems = useMemo(
+    () => (isAdmin ? [...baseNavItems, ...adminOnlyNavItems] : baseNavItems),
+    [isAdmin]
+  );
 
   return (
     <div className="min-h-screen bg-bg text-text">
       <aside className="fixed inset-y-0 left-0 hidden w-[260px] border-r border-border bg-surface/95 px-5 py-6 backdrop-blur lg:block">
         <Link href="/events" className="flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-2xl bg-brand text-lg font-bold text-text">
-            E
-          </div>
+          <EventMintLogo size={44} />
           <div>
             <p className="font-semibold">EventMint Admin</p>
             <p className="text-xs text-text2">Yönetim Paneli</p>

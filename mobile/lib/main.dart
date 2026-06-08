@@ -8,6 +8,7 @@ import 'services/user_record_service.dart';
 import 'screens/banned_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
+import 'screens/splash_screen.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
@@ -66,9 +67,7 @@ class _AuthGateState extends State<AuthGate> {
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const SplashScreen();
         }
 
         final user = snapshot.data;
@@ -90,9 +89,7 @@ class _AuthGateState extends State<AuthGate> {
           future: _bannedFuture,
           builder: (context, bannedSnapshot) {
             if (bannedSnapshot.connectionState == ConnectionState.waiting) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
+              return const SplashScreen();
             }
 
             final isBanned = bannedSnapshot.data == true;
